@@ -16,8 +16,14 @@ import data
 import quant_engine
 from logger_config import log
 
-# 从 factor_calculator 导入因子列表
-from factor_calculator import FACTORS_TO_CALCULATE
+# 【V2.2 重构】将因子列表的定义移入此统一管道脚本中，移除对旧文件的依赖
+FACTORS_TO_CALCULATE = [
+    'pe_ttm', 'roe', 'growth_revenue_yoy', 'debt_to_assets', 'momentum', 
+    'volatility', 'net_inflow_ratio', 'holder_num_change_ratio', 
+    'major_shareholder_net_buy_ratio', 'top_list_net_buy_amount', 
+    'dividend_yield', 'forecast_growth_rate', 'repurchase_ratio', 
+    'block_trade_ratio'
+]
 
 def extract_data(trade_date: str) -> dict:
     """
@@ -45,18 +51,23 @@ def extract_data(trade_date: str) -> dict:
     log.info(f"  正在获取大宗交易数据...")
     block_trade_df = dm.pro.block_trade(trade_date=trade_date)
 
-    # --- 2. 循环获取时序数据 (价格) ---
-    log.info("  开始循环获取各股票的历史价格...")
+    # --- 2. 【性能优化】异步并发获取时序数据 (价格) ---
+    log.info("  开始异步并发获取各股票的历史价格...")
     start_date_lookback = (pd.to_datetime(trade_date) - timedelta(days=90)).strftime('%Y%m%d')
-    prices_dict = {}
-    for i, code in enumerate(ts_codes):
-        if (i + 1) % 500 == 0:
-            log.info(f"    价格获取进度: {i+1}/{len(ts_codes)}")
-        prices = dm.get_daily(code, start_date_lookback, trade_date)
-        if prices is not None and not prices.empty:
-            prices_dict[code] = prices.set_index('trade_date')['close']
+    
+    # 调用DataManager中已有的高性能异步下载方法
+    prices_dict_raw = dm.run_batch_download(ts_codes, start_date_lookback, trade_date)
+    
+    # 将原始DataFrame字典转换为所需的Series字典
+    prices_dict = {
+        code: df.set_index('trade_date')['close']
+        for code, df in prices_dict_raw.items()
+        if df is not None and not df.empty
+    }
+    
     daily_prices_df = pd.DataFrame(prices_dict)
-    daily_prices_df.index = pd.to_datetime(daily_prices_df.index)
+    if not daily_prices_df.empty:
+        daily_prices_df.index = pd.to_datetime(daily_prices_df.index)
 
     log.info("【数据抽取】所有原始数据提取完毕。")
 

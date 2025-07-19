@@ -11,7 +11,7 @@ def run_data_tests():
     log.info("===== [测试开始] 数据管道验证 =====")
     
     try:
-        dm = data.DataManager(token=config.TUSHARE_TOKEN, db_path=config.DB_PATH)
+        dm = data.DataManager(token=config.TUSHARE_TOKEN, db_url=config.DATABASE_URL)
         log.info("1. DataManager 实例化成功。")
     except Exception as e:
         log.critical("1. DataManager 实例化失败！测试终止。", exc_info=True)

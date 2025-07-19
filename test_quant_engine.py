@@ -12,7 +12,7 @@ def run_engine_tests():
     log.info("===== [测试开始] 核心量化引擎验证 =====")
     
     try:
-        dm = data.DataManager(token=config.TUSHARE_TOKEN, db_path=config.DB_PATH)
+        dm = data.DataManager(token=config.TUSHARE_TOKEN, db_url=config.DATABASE_URL)
         ff = qe.FactorFactory(_data_manager=dm)
         fp = qe.FactorProcessor(_data_manager=dm)
         log.info("1. 引擎组件实例化成功。")

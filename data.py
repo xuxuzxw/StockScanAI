@@ -338,7 +338,6 @@ class DataManager:
                     );
                 """))
 
-
             except ProgrammingError as e:
                 print(f"数据库初始化时发生已知错误（可能已初始化），可忽略: {e}")
             except Exception as e:
@@ -540,7 +539,7 @@ class DataManager:
     # --- (三) 财务与基本面 (同步) ---
     @api_rate_limit()
     def get_fina_indicator(self, ts_code: str, force_update=False):
-        """【V2.2重构】获取单只股票的财务指标，适配统一大表 financial_indicators。"""
+        """【V2.2重构完成】获取单只股票的财务指标，适配统一大表 financial_indicators。"""
         table_name = 'financial_indicators'
         primary_keys = ['ts_code', 'end_date']
 
@@ -559,10 +558,21 @@ class DataManager:
             query = sqlalchemy.text(f"SELECT * FROM {table_name} WHERE ts_code = :ts_code")
             with self.engine.connect() as connection:
                 df_db = pd.read_sql(query, connection, params={'ts_code': ts_code})
-            return df_db.sort_values(by='end_date', ascending=False).reset_index(drop=True)
+            if not df_db.empty:
+                return df_db.sort_values(by='end_date', ascending=False).reset_index(drop=True)
+            else: # 如果数据库为空，则触发一次API更新
+                df_api = self.pro.fina_indicator(ts_code=ts_code)
+                if df_api is not None and not df_api.empty:
+                    db_cols = ['ts_code', 'ann_date', 'end_date', 'roe', 'netprofit_yoy', 'debt_to_assets', 'or_yoy']
+                    api_cols_to_keep = [col for col in db_cols if col in df_api.columns]
+                    self._upsert_data(table_name, df_api[api_cols_to_keep], primary_keys)
+                    return df_api[api_cols_to_keep].sort_values(by='end_date', ascending=False).reset_index(drop=True)
+                
         except Exception as e:
             # log.error(f"从 {table_name} 读取 {ts_code} 数据失败: {e}。")
             return pd.DataFrame()
+        
+        return pd.DataFrame()
 
 
     @api_rate_limit()

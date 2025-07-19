@@ -137,9 +137,8 @@ class AITools:
                 prev_roe = conn.execute(query).scalar_one_or_none()
             
             if prev_roe:
-                # 注意：此处应更新ROE，而不是营收同比增长
                 roe_str = structured_data["基本面指标"].get("roe", "N/A")
-                structured_data["基本面指标"]["roe"] = f"{roe_str} (上一季度: {prev_roe:.2%})"
+                structured_data["基本面指标"]["roe"] = f"{roe_str} (上一季度: {prev_roe:.2f})"
 
         except Exception as e:
             log.warning(f"为 {ts_code} 获取历史趋势上下文失败: {e}")

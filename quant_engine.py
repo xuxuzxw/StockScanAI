@@ -568,13 +568,11 @@ class FactorAnalyzer:
     - 负责因子的存储、加载和有效性分析。
     - 核心分析工具包括 IC/IR 计算和分层回测。
     """
-    def __init__(self, _data_manager, db_path=None):
+    def __init__(self, _data_manager):
         self.data_manager = _data_manager
-        # 如果未提供db_path，则从data_manager的连接中获取
-        if db_path:
-             self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        else:
-             self.conn = _data_manager.conn
+        # 【V2.0 架构统一】移除旧的db_path和sqlite3连接逻辑，
+        # 完全依赖 data_manager 提供的 SQLAlchemy engine connection。
+        self.conn = _data_manager.conn
 
 
     def save_factors_to_db(self, factors_df: pd.DataFrame, table_name: str):
@@ -1199,47 +1197,51 @@ class MLAlphaStrategy:
 
     def _prepare_data(self, all_prices: pd.DataFrame, all_factors: pd.DataFrame, forward_return_period=20, quintile=5):
         """
-        准备用于模型训练的特征(X)和目标(y)。
-        :param all_prices: 包含所有股票价格的时间序列DataFrame。
-        :param all_factors: 包含所有因子暴露的时间序列DataFrame。
+        【V2.3 修复版】准备用于模型训练的特征(X)和目标(y)。
+        :param all_prices: 包含所有股票价格的时间序列DataFrame (wide format: dates x stocks)。
+        :param all_factors: 包含所有因子暴露的长格式DataFrame (long format: date, ts_code, factor_name, factor_value)。
         :param forward_return_period: 预测的未来收益周期。
         :param quintile: 收益率分组数量，5表示取收益率最高的20%的股票作为正样本。
         :return: X (特征), y (标签)
         """
         log.info("【ML数据准备】开始准备训练数据...")
-        # 1. 计算未来收益率作为标签
+        # 1. 计算未来收益率作为标签 (y)
         future_returns = all_prices.pct_change(periods=forward_return_period).shift(-forward_return_period)
-        
-        # 2. 将收益率按分位数分组，定义正样本（例如，收益率最高的20%）
-        # 使用 rank(pct=True) 代替 qcut，健壮性更好，能处理重复值
-        ranks = future_returns.rank(axis=1, pct=True)
+        ranks = future_returns.rank(axis=1, pct=True, na_option='keep') # 保留NaN
         target = (ranks > (1 - 1/quintile))
+        y = target.stack().rename('target')
 
-        # 3. 对齐因子数据（特征）和收益率数据（标签）
-        # inner join 确保只使用在两个DataFrame中都存在的时间点
-        aligned_factors, aligned_target = all_factors.align(target, join='inner', axis=0)
+        # 2. 准备特征矩阵 (X)
+        # 将长格式的因子数据转换为宽格式
+        X = all_factors.pivot_table(index='trade_date', columns='ts_code', values='factor_value', aggfunc='first')
+        X = X.stack().rename('factor_value').reset_index()
+        # 再次透视，构建最终的特征矩阵
+        X = X.pivot_table(index=['trade_date', 'ts_code'], columns='factor_name', values='factor_value')
         
-        # 4. 将二维数据（时间 x 股票）转换为一维的长格式，适合机器学习
-        X = aligned_factors.stack(dropna=False).to_frame(name='factor_value').reset_index()
-        X = X.pivot_table(index=['trade_date', 'ts_code'], columns='factor_name', values='factor_value').dropna()
-        
-        y = aligned_target.stack()
-        
-        # 再次对齐，确保每个样本都有特征和标签
-        X, y = X.align(y, join='inner', axis=0)
-        
-        self.features_columns = X.columns.tolist()
-        log.info(f"【ML数据准备】数据准备完毕。共 {len(X)} 个样本，{len(self.features_columns)} 个特征。")
-        return X, y
+        # 3. 对齐特征和标签
+        # 合并X和y，dropna确保每个样本都有完整的特征和标签
+        combined_data = X.join(y, how='inner').dropna()
 
-    def train(self, all_prices: pd.DataFrame, all_factors: pd.DataFrame, model_path="ml_model.pkl"):
+        if combined_data.empty:
+            log.warning("对齐和去空值后，没有剩余的有效训练数据。")
+            return pd.DataFrame(), pd.Series()
+
+        y_final = combined_data['target']
+        X_final = combined_data.drop(columns=['target'])
+
+        self.features_columns = X_final.columns.tolist()
+        log.info(f"【ML数据准备】数据准备完毕。共 {len(X_final)} 个样本，{len(self.features_columns)} 个特征。")
+        return X_final, y_final
+
+    def train(self, all_prices: pd.DataFrame, all_factors_long: pd.DataFrame, model_path="ml_model.pkl"):
         """
-        在准备好的数据上训练机器学习模型，并保存到本地。
+        【V2.3 修正版】在准备好的数据上训练机器学习模型，并保存到本地。
+        :param all_factors_long: 长格式的因子数据。
         :param model_path: 模型保存路径。
         :return: 训练结果的字典。
         """
         import joblib
-        X, y = self._prepare_data(all_prices, all_factors)
+        X, y = self._prepare_data(all_prices, all_factors_long)
         
         if X.empty:
             return {"status": "error", "message": "没有有效的训练数据。"}
@@ -1293,9 +1295,18 @@ class MLAlphaStrategy:
         if factor_snapshot.empty:
             return pd.Index([])
 
+        # 【鲁棒性修正】在预测前，确保输入DataFrame的列顺序与模型训练时完全一致
+        try:
+            # LightGBM模型会通过 model.feature_name_ 保存特征名
+            model_features = self.model.feature_name_
+            factor_snapshot_aligned = factor_snapshot[model_features]
+        except Exception as e:
+            log.error(f"特征对齐失败: {e}。模型需要特征: {self.model.feature_name_}，但输入数据只有: {factor_snapshot.columns.tolist()}")
+            return pd.Index([])
+
         # 预测成为正样本（即未来高收益）的概率
-        probabilities = self.model.predict_proba(factor_snapshot)[:, 1]
-        prob_series = pd.Series(probabilities, index=factor_snapshot.index)
+        probabilities = self.model.predict_proba(factor_snapshot_aligned)[:, 1]
+        prob_series = pd.Series(probabilities, index=factor_snapshot_aligned.index)
         
         return prob_series.nlargest(top_n).index
 
@@ -1583,7 +1594,7 @@ class SimplePortfolio(Portfolio):
             
             # 确保有足够现金执行交易
             if self.current_holdings['cash'] < target_value:
-                log.debug(f"[{event.timestamp}] 跳过买入 {event.ts_code}: 现金不足。")
+                log.debug(f"[{self.data_handler.latest_data['timestamp'].strftime('%Y-%m-%d')}] 跳过买入 {event.ts_code}: 现金不足。")
                 return
 
             quantity = int(target_value / price // 100 * 100) # 按手买入
