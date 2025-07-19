@@ -370,8 +370,12 @@ if tab_ranker:
     if latest_trade_date:
         # --- 2. 用户选择因子与权重 ---
         st.markdown("#### (1) 配置您的多因子模型")
+<<<<<<< HEAD
         # 【V2.2 重构】从统一的数据管道脚本中导入因子列表，确保源唯一
         from run_daily_pipeline import FACTORS_TO_CALCULATE as available_factors
+=======
+        from factor_calculator import FACTORS_TO_CALCULATE as available_factors
+>>>>>>> 2386c3ca160ab95b1805f16f28c5390aa5547135
 
         cols = st.columns(4)
         factor_direction = {
@@ -453,9 +457,25 @@ if tab_ranker:
                         final_rank = final_rank.sort_values('综合得分', ascending=False).reset_index(drop=True)
 
                         # --- F. 个股结果展示与交互 ---
+<<<<<<< HEAD
                         final_rank_display = final_rank[['ts_code', 'name', 'industry', '综合得分']].head(100)
                         
                         st.caption("💡 小提示：直接点击下方表格中的任意一行，系统将自动跳转到该股票的深度分析页面。")
+=======
+                        final_rank_display = final_rank[['ts_code', 'name', 'industry', '综合得分']]
+                        st.dataframe(final_rank_display.head(100), hide_index=True)
+                        st.caption("💡 小提示：直接点击上方个股表格中的任意一行，系统将自动跳转到该股票的深度分析页面。")
+
+                        # (交互逻辑保持不变，但需要确保 data_editor 在st.rerun后能正确工作)
+                        if 'rank_editor_selection' not in st.session_state:
+                             st.session_state.rank_editor_selection = None
+
+                        # 使用 on_change 回调来捕获选择
+                        def handle_selection():
+                            if "rank_editor" in st.session_state and st.session_state.rank_editor["edited_rows"]:
+                                selected_row_index = list(st.session_state.rank_editor["edited_rows"].keys())[0]
+                                st.session_state.rank_editor_selection = final_rank_display.iloc[selected_row_index]
+>>>>>>> 2386c3ca160ab95b1805f16f28c5390aa5547135
 
                         # 【交互修复】使用 st.data_editor 替代 st.dataframe，以捕获行选择事件
                         # 将选择状态存储在 session_state 中
@@ -470,6 +490,7 @@ if tab_ranker:
                             key="rank_selector"
                         )
 
+<<<<<<< HEAD
                         # 检查是否有行被选中
                         if st.session_state.rank_selector and st.session_state.rank_selector.get("selection", {}).get("rows"):
                             selected_index = st.session_state.rank_selector["selection"]["rows"][0]
@@ -481,6 +502,14 @@ if tab_ranker:
                             # 更新全局 session_state 并触发重跑，让侧边栏的 selectbox 更新
                             st.session_state.selected_stock = f"{selected_ts_code} {selected_name}"
                             st.rerun()
+=======
+                        if st.session_state.rank_editor_selection is not None:
+                             selected_ts_code = st.session_state.rank_editor_selection['ts_code']
+                             selected_name = st.session_state.rank_editor_selection['name']
+                             st.session_state.selected_stock = f"{selected_ts_code} {selected_name}"
+                             st.session_state.rank_editor_selection = None # 重置
+                             st.rerun()
+>>>>>>> 2386c3ca160ab95b1805f16f28c5390aa5547135
 
                     except Exception as e:
                         st.error(f"排名计算过程中发生错误: {e}")
@@ -1496,4 +1525,8 @@ if tab_tasks:
                 except FileNotFoundError:
                     st.warning("⚠️ 日志文件 'quant_project.log' 未找到。")
                 except Exception as e:
+<<<<<<< HEAD
                     st.error(f"❌ 读取日志文件失败: {e}")
+=======
+                    st.error(f"❌ 读取日志文件失败: {e}")
+>>>>>>> 2386c3ca160ab95b1805f16f28c5390aa5547135
