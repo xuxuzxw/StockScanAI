@@ -315,42 +315,6 @@ if tab_strategy_board:
         except Exception as e:
             st.error(f"加载晨报时发生数据库错误: {e}")
 
-# 定义哪些标签页依赖 V2 模块
-V2_TABS = ["🎯 市场全景", "🏭 行业透视"]
-
-# 根据模块加载情况，动态生成最终的标签页列表
-if V2_MODULES_LOADED:
-    tab_list = all_tabs_ordered
-else:
-    # 如果 V2 模块加载失败，则从理想顺序中移除对应的标签页
-    tab_list = [tab for tab in all_tabs_ordered if tab not in V2_TABS]
-
-tabs = st.tabs(tab_list)
-
-# 根据最终生成的 tab_list 动态解包，更加健壮
-# 使用 dict comprehension 和 globals() 来动态创建变量，避免复杂的 if/else
-tab_mapping = {tab.replace(" ", "_").replace("🏆_", "").replace("📈_", "").replace("💰_", "").replace("🧾_", "").replace("🌐_", "").replace("🎯_", "").replace("🏭_", "").replace("🤖_", "").replace("🔬_", "").replace("🚀_", "").replace("⚙️_", ""): tab_obj for tab, tab_obj in zip(tab_list, tabs)}
-globals().update(tab_mapping)
-
-# 为 V2 模块创建占位符，以防加载失败
-if not V2_MODULES_LOADED:
-    tab_market, tab_industry = None, None
-else:
-    tab_market = tab_mapping.get('市场全景')
-    tab_industry = tab_mapping.get('行业透视')
-
-# 为了代码可读性，为几个核心tab创建别名
-tab_ranker = tab_mapping.get('智能选股排名')
-tab_main = tab_mapping.get('行情总览')
-tab_funds = tab_mapping.get('资金与筹码')
-tab_finance = tab_mapping.get('深度财务')
-tab_macro = tab_mapping.get('宏观环境')
-tab_ai = tab_mapping.get('AI综合报告')
-tab_analyzer = tab_mapping.get('因子分析器')
-tab_backtest = tab_mapping.get('回测实验室')
-tab_trainer = tab_mapping.get('模型训练室') # V2.3 新增
-tab_tasks = tab_mapping.get('系统任务')
-
 
 # --- 1. 智能选股排名 ---
 # V2.3 健壮性优化：全面使用 tab_objects.get()
@@ -370,12 +334,8 @@ if tab_ranker:
     if latest_trade_date:
         # --- 2. 用户选择因子与权重 ---
         st.markdown("#### (1) 配置您的多因子模型")
-<<<<<<< HEAD
         # 【V2.2 重构】从统一的数据管道脚本中导入因子列表，确保源唯一
         from run_daily_pipeline import FACTORS_TO_CALCULATE as available_factors
-=======
-        from factor_calculator import FACTORS_TO_CALCULATE as available_factors
->>>>>>> 2386c3ca160ab95b1805f16f28c5390aa5547135
 
         cols = st.columns(4)
         factor_direction = {
@@ -457,25 +417,9 @@ if tab_ranker:
                         final_rank = final_rank.sort_values('综合得分', ascending=False).reset_index(drop=True)
 
                         # --- F. 个股结果展示与交互 ---
-<<<<<<< HEAD
                         final_rank_display = final_rank[['ts_code', 'name', 'industry', '综合得分']].head(100)
                         
                         st.caption("💡 小提示：直接点击下方表格中的任意一行，系统将自动跳转到该股票的深度分析页面。")
-=======
-                        final_rank_display = final_rank[['ts_code', 'name', 'industry', '综合得分']]
-                        st.dataframe(final_rank_display.head(100), hide_index=True)
-                        st.caption("💡 小提示：直接点击上方个股表格中的任意一行，系统将自动跳转到该股票的深度分析页面。")
-
-                        # (交互逻辑保持不变，但需要确保 data_editor 在st.rerun后能正确工作)
-                        if 'rank_editor_selection' not in st.session_state:
-                             st.session_state.rank_editor_selection = None
-
-                        # 使用 on_change 回调来捕获选择
-                        def handle_selection():
-                            if "rank_editor" in st.session_state and st.session_state.rank_editor["edited_rows"]:
-                                selected_row_index = list(st.session_state.rank_editor["edited_rows"].keys())[0]
-                                st.session_state.rank_editor_selection = final_rank_display.iloc[selected_row_index]
->>>>>>> 2386c3ca160ab95b1805f16f28c5390aa5547135
 
                         # 【交互修复】使用 st.data_editor 替代 st.dataframe，以捕获行选择事件
                         # 将选择状态存储在 session_state 中
@@ -490,7 +434,6 @@ if tab_ranker:
                             key="rank_selector"
                         )
 
-<<<<<<< HEAD
                         # 检查是否有行被选中
                         if st.session_state.rank_selector and st.session_state.rank_selector.get("selection", {}).get("rows"):
                             selected_index = st.session_state.rank_selector["selection"]["rows"][0]
@@ -502,14 +445,6 @@ if tab_ranker:
                             # 更新全局 session_state 并触发重跑，让侧边栏的 selectbox 更新
                             st.session_state.selected_stock = f"{selected_ts_code} {selected_name}"
                             st.rerun()
-=======
-                        if st.session_state.rank_editor_selection is not None:
-                             selected_ts_code = st.session_state.rank_editor_selection['ts_code']
-                             selected_name = st.session_state.rank_editor_selection['name']
-                             st.session_state.selected_stock = f"{selected_ts_code} {selected_name}"
-                             st.session_state.rank_editor_selection = None # 重置
-                             st.rerun()
->>>>>>> 2386c3ca160ab95b1805f16f28c5390aa5547135
 
                     except Exception as e:
                         st.error(f"排名计算过程中发生错误: {e}")
@@ -1411,10 +1346,14 @@ if tab_trainer:
         except Exception:
             all_db_factors = ['momentum', 'roe', 'pe_ttm', 'volatility', 'net_inflow_ratio']
 
+        # 【鲁棒性修复】确保默认值是可用选项的子集，防止因数据库为空或因子不匹配而报错
+        desired_defaults = ['momentum', 'roe', 'pe_ttm', 'volatility']
+        actual_defaults = [f for f in desired_defaults if f in all_db_factors]
+
         selected_features = st.multiselect(
             "选择用作特征的因子:",
             options=all_db_factors,
-            default=['momentum', 'roe', 'pe_ttm', 'volatility']
+            default=actual_defaults
         )
 
         st.markdown("#### 2. 开始训练")
@@ -1525,8 +1464,4 @@ if tab_tasks:
                 except FileNotFoundError:
                     st.warning("⚠️ 日志文件 'quant_project.log' 未找到。")
                 except Exception as e:
-<<<<<<< HEAD
                     st.error(f"❌ 读取日志文件失败: {e}")
-=======
-                    st.error(f"❌ 读取日志文件失败: {e}")
->>>>>>> 2386c3ca160ab95b1805f16f28c5390aa5547135

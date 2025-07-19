@@ -15,7 +15,7 @@ import json
 import config
 
 # --- 装饰器：用于缓存和API频率控制 ---
-def api_rate_limit(calls_per_minute=500):
+def api_rate_limit(calls_per_minute=200):
     """Tushare API调用频率控制装饰器"""
     min_interval = 60.0 / calls_per_minute
     last_call_time = {'value': 0}
@@ -43,7 +43,7 @@ class DataManager:
     """
     _API_URL = 'http://api.tushare.pro'
 
-    def __init__(self, token=config.TUSHARE_TOKEN, db_url=config.DATABASE_URL, concurrency_limit=20, requests_per_minute=400):
+    def __init__(self, token=config.TUSHARE_TOKEN, db_url=config.DATABASE_URL, concurrency_limit=10, requests_per_minute=200):
         if not token or token == "YOUR_TUSHARE_TOKEN":
             raise ValueError("Tushare Token未在config.py中配置。")
         self.pro = ts.pro_api(token)
