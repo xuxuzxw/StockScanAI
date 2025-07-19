@@ -309,11 +309,39 @@ def full_analysis_workflow(
         block_trade_df = data_manager.get_block_trade(trade_date=end_date)
         block_trade_ratio = factor_factory.calc_block_trade_ratio(ts_code, end_date, block_trade_df)
 
+        # --- V2.4 新增：计算并解读技术指标 ---
+        tech_signals = {}
+        try:
+            # MACD
+            macd_data = factor_factory.calc_macd(ts_code, end_date)
+            if all(pd.notna(v) for v in macd_data.values()):
+                status = "金叉" if macd_data['macd_hist'] > 0 and (factor_factory.calc_macd(ts_code, (datetime.strptime(end_date, '%Y%m%d') - timedelta(days=5)).strftime('%Y%m%d'))['macd_hist'] <= 0) else \
+                         "死叉" if macd_data['macd_hist'] < 0 and (factor_factory.calc_macd(ts_code, (datetime.strptime(end_date, '%Y%m%d') - timedelta(days=5)).strftime('%Y%m%d'))['macd_hist'] >= 0) else \
+                         "多头" if macd_data['diff'] > macd_data['dea'] else "空头"
+                tech_signals['MACD'] = f"DIFF: {macd_data['diff']:.2f}, DEA: {macd_data['dea']:.2f}, 状态: {status}"
+            
+            # RSI
+            rsi_value = factor_factory.calc_rsi(ts_code, end_date)
+            if pd.notna(rsi_value):
+                rsi_status = "超买区" if rsi_value > 70 else "超卖区" if rsi_value < 30 else "适中区"
+                tech_signals['RSI(14)'] = f"数值: {rsi_value:.2f} ({rsi_status})"
+
+            # BOLL
+            boll_data = factor_factory.calc_boll(ts_code, end_date)
+            if all(pd.notna(v) for v in boll_data.values()):
+                boll_status = "触及上轨" if boll_data['close'] >= boll_data['upper'] else \
+                              "触及下轨" if boll_data['close'] <= boll_data['lower'] else "通道内运行"
+                tech_signals['BOLL(20)'] = f"上轨: {boll_data['upper']:.2f}, 中轨: {boll_data['middle']:.2f}, 下轨: {boll_data['lower']:.2f}, 状态: {boll_status}"
+
+        except Exception as e:
+            log.warning(f"为 {ts_code} 计算V2.4技术指标时出错: {e}")
+
 
         final_data_payload = {
             "股票代码": ts_code,
             "分析日期": end_date,
             "技术面指标": {"momentum": f"{momentum:.2%}", "volatility": f"{volatility:.2%}"},
+            "技术信号解读": tech_signals, # V2.4 新增
             "资金面指标": {"net_inflow_ratio": f"{net_inflow:.2%}", "north_hold_change": f"{north_hold:.2f}%"},
             "基本面指标": {
                 "roe": f"{roe:.2%}", 

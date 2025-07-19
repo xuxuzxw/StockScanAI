@@ -572,3 +572,114 @@ AssertionError: 为 600519.SH 计算的 pe_ttm 无效。
 2025-07-20 01:34:15,103 - QuantProject - INFO - run_system_check - 151 - === 结果: 3/6 项检查通过 ===
 2025-07-20 01:34:15,103 - QuantProject - INFO - run_system_check - 152 - ==============================================
 2025-07-20 01:34:15,103 - QuantProject - WARNING - run_system_check - 156 - 系统存在问题，请根据上面的 [FAIL] 日志进行排查。
+2025-07-20 01:35:33,866 - QuantProject - INFO - run_system_check - 43 - ==============================================
+2025-07-20 01:35:33,867 - QuantProject - INFO - run_system_check - 44 - === A股量化投研平台 - 系统健康检查启动 ===
+2025-07-20 01:35:33,867 - QuantProject - INFO - run_system_check - 45 - ==============================================
+2025-07-20 01:35:33,867 - QuantProject - INFO - run_system_check - 48 - 
+--- [检查 1/6] 配置文件与环境变量 (config.py & .env) ---
+2025-07-20 01:35:33,867 - QuantProject - INFO - run_system_check - 53 -   [PASS] 所有关键环境变量已成功加载。
+2025-07-20 01:35:33,867 - QuantProject - INFO - run_system_check - 62 - 
+--- [检查 2/6] 数据库连接 ---
+2025-07-20 01:35:33,990 - QuantProject - INFO - run_system_check - 67 -   [PASS] 成功连接到数据库: localhost:5432/quant_db
+2025-07-20 01:35:33,991 - QuantProject - INFO - run_system_check - 76 - 
+--- [检查 3/6] 数据层与Tushare API连通性 ---
+2025-07-20 01:35:34,089 - QuantProject - INFO - run_system_check - 82 -   [PASS] DataManager 实例化成功，并成功从 Tushare 获取到 5418 只上市股票的基本信息。
+2025-07-20 01:35:34,090 - QuantProject - INFO - run_system_check - 91 - 
+--- [检查 4/6] 引擎层因子计算 ---
+2025-07-20 01:35:34,498 - QuantProject - INFO - run_system_check - 104 -   [PASS] 因子引擎实例化成功，并为 600519.SH 计算出 PE(TTM) 因子值为: 20.28
+2025-07-20 01:35:34,498 - QuantProject - INFO - run_system_check - 112 - 
+--- [检查 5/6] 智能分析层与AI API连通性 (低成本测试) ---
+2025-07-20 01:35:39,540 - QuantProject - INFO - run_system_check - 119 -   [PASS] AI引擎实例化成功，并成功调用低成本模型 API，密钥和网络连接正常。
+2025-07-20 01:35:39,540 - QuantProject - INFO - run_system_check - 128 - 
+--- [检查 6/6] 端到端工作流冒烟测试 ---
+2025-07-20 01:35:39,543 - QuantProject - INFO - run_system_check - 133 -   正在尝试模拟调用每日策略工作流...
+2025-07-20 01:35:39,544 - QuantProject - INFO - run_system_check - 140 -   [PASS] 每日策略工作流的核心组件均可被成功实例化，端到端流程基本通畅。
+2025-07-20 01:35:39,544 - QuantProject - INFO - run_system_check - 153 - 
+==============================================
+2025-07-20 01:35:39,544 - QuantProject - INFO - run_system_check - 154 - === 系统健康检查完成 ===
+2025-07-20 01:35:39,544 - QuantProject - INFO - run_system_check - 155 - === 结果: 6/6 项检查通过 ===
+2025-07-20 01:35:39,544 - QuantProject - INFO - run_system_check - 156 - ==============================================
+2025-07-20 01:35:39,544 - QuantProject - INFO - run_system_check - 158 - 恭喜！您的A股量化投研平台所有核心组件均工作正常。
+2025-07-20 01:35:39,675 - QuantProject - INFO - backfill_data - 38 - 处理进度: 300/5418
+2025-07-20 01:37:12,642 - QuantProject - INFO - backfill_data - 38 - 处理进度: 400/5418
+2025-07-20 01:38:37,846 - QuantProject - INFO - backfill_data - 38 - 处理进度: 500/5418
+2025-07-20 01:40:07,058 - QuantProject - INFO - backfill_data - 38 - 处理进度: 600/5418
+2025-07-20 01:41:39,493 - QuantProject - INFO - backfill_data - 38 - 处理进度: 700/5418
+2025-07-20 01:43:09,705 - QuantProject - INFO - backfill_data - 38 - 处理进度: 800/5418
+2025-07-20 01:44:40,406 - QuantProject - INFO - backfill_data - 38 - 处理进度: 900/5418
+2025-07-20 01:46:17,839 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1000/5418
+2025-07-20 01:47:56,196 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1100/5418
+2025-07-20 01:49:30,396 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1200/5418
+2025-07-20 01:51:14,846 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1300/5418
+2025-07-20 01:52:52,558 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1400/5418
+2025-07-20 01:54:22,018 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1500/5418
+2025-07-20 01:56:01,507 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1600/5418
+2025-07-20 01:57:34,443 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1700/5418
+2025-07-20 01:59:07,447 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1800/5418
+2025-07-20 02:00:43,566 - QuantProject - INFO - backfill_data - 38 - 处理进度: 1900/5418
+2025-07-20 02:02:23,785 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2000/5418
+2025-07-20 02:03:55,776 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2100/5418
+2025-07-20 02:05:31,474 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2200/5418
+2025-07-20 02:07:07,101 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2300/5418
+2025-07-20 02:08:40,345 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2400/5418
+2025-07-20 02:10:16,473 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2500/5418
+2025-07-20 02:12:02,248 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2600/5418
+2025-07-20 02:13:34,340 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2700/5418
+2025-07-20 02:15:13,447 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2800/5418
+2025-07-20 02:16:42,082 - QuantProject - INFO - backfill_data - 38 - 处理进度: 2900/5418
+2025-07-20 02:18:18,568 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3000/5418
+2025-07-20 02:19:57,920 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3100/5418
+2025-07-20 02:21:40,153 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3200/5418
+2025-07-20 02:23:17,100 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3300/5418
+2025-07-20 02:24:59,316 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3400/5418
+2025-07-20 02:26:41,341 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3500/5418
+2025-07-20 02:28:21,549 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3600/5418
+2025-07-20 02:29:59,490 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3700/5418
+2025-07-20 02:31:48,350 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3800/5418
+2025-07-20 02:33:35,086 - QuantProject - INFO - backfill_data - 38 - 处理进度: 3900/5418
+2025-07-20 02:35:13,774 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4000/5418
+2025-07-20 02:37:03,829 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4100/5418
+2025-07-20 02:38:48,204 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4200/5418
+2025-07-20 02:40:37,504 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4300/5418
+2025-07-20 02:42:23,472 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4400/5418
+2025-07-20 02:44:04,959 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4500/5418
+2025-07-20 02:45:49,660 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4600/5418
+2025-07-20 02:47:32,761 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4700/5418
+2025-07-20 02:49:13,980 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4800/5418
+2025-07-20 02:51:00,189 - QuantProject - INFO - backfill_data - 38 - 处理进度: 4900/5418
+2025-07-20 02:52:43,290 - QuantProject - INFO - backfill_data - 38 - 处理进度: 5000/5418
+2025-07-20 02:54:25,283 - QuantProject - INFO - backfill_data - 38 - 处理进度: 5100/5418
+2025-07-20 02:56:15,572 - QuantProject - INFO - backfill_data - 38 - 处理进度: 5200/5418
+2025-07-20 02:58:04,878 - QuantProject - INFO - backfill_data - 38 - 处理进度: 5300/5418
+2025-07-20 02:59:53,561 - QuantProject - INFO - backfill_data - 38 - 处理进度: 5400/5418
+2025-07-20 03:00:12,098 - QuantProject - INFO - backfill_data - 44 - 数据回填任务完成。
+2025-07-20 03:00:15,510 - QuantProject - INFO - run_daily_pipeline - 177 - ===== 开始执行 20250718 的统一数据管道任务 =====
+2025-07-20 03:00:15,515 - QuantProject - INFO - run_daily_pipeline - 35 - 【数据抽取】开始为 20250718 抽取全市场原始数据...
+2025-07-20 03:00:15,609 - QuantProject - INFO - run_daily_pipeline - 42 -   正在获取每日指标...
+2025-07-20 03:00:16,145 - QuantProject - INFO - run_daily_pipeline - 45 -   正在获取资金流数据...
+2025-07-20 03:00:16,762 - QuantProject - INFO - run_daily_pipeline - 48 -   正在获取龙虎榜数据...
+2025-07-20 03:00:16,930 - QuantProject - INFO - run_daily_pipeline - 51 -   正在获取大宗交易数据...
+2025-07-20 03:00:17,107 - QuantProject - INFO - run_daily_pipeline - 55 -   开始异步并发获取各股票的历史价格...
+2025-07-20 03:20:40,644 - QuantProject - INFO - initialize_database - 18 - ===== 开始执行数据库和基础数据初始化 =====
+2025-07-20 03:20:40,770 - QuantProject - INFO - initialize_database - 22 - 数据库已连接: postgresql+psycopg2://quant_user:your_strong_password@localhost:5432/quant_db
+2025-07-20 03:20:40,770 - QuantProject - INFO - initialize_database - 25 - 正在下载和缓存所有A股基本信息...
+2025-07-20 03:20:41,532 - QuantProject - INFO - initialize_database - 28 - 成功获取 5418 条股票基本信息。
+2025-07-20 03:20:41,532 - QuantProject - INFO - initialize_database - 37 - 正在为核心标的预加载历史行情数据...
+2025-07-20 03:20:41,532 - QuantProject - INFO - initialize_database - 49 -   正在处理 indices: 000300.SH...
+2025-07-20 03:20:43,069 - QuantProject - INFO - initialize_database - 61 -   > 成功为 000300.SH 加载了 2427 条日线数据。
+2025-07-20 03:20:43,069 - QuantProject - INFO - initialize_database - 49 -   正在处理 indices: 000905.SH...
+2025-07-20 03:20:44,608 - QuantProject - INFO - initialize_database - 61 -   > 成功为 000905.SH 加载了 2427 条日线数据。
+2025-07-20 03:20:44,609 - QuantProject - INFO - initialize_database - 49 -   正在处理 indices: 399006.SZ...
+2025-07-20 03:20:46,103 - QuantProject - INFO - initialize_database - 61 -   > 成功为 399006.SZ 加载了 2427 条日线数据。
+2025-07-20 03:20:46,104 - QuantProject - INFO - initialize_database - 49 -   正在处理 stocks: 600519.SH...
+2025-07-20 03:20:49,203 - QuantProject - INFO - initialize_database - 61 -   > 成功为 600519.SH 加载了 2427 条日线数据。
+2025-07-20 03:20:49,204 - QuantProject - INFO - initialize_database - 49 -   正在处理 stocks: 000001.SZ...
+2025-07-20 03:20:52,092 - QuantProject - INFO - initialize_database - 61 -   > 成功为 000001.SZ 加载了 2427 条日线数据。
+2025-07-20 03:20:52,092 - QuantProject - INFO - initialize_database - 49 -   正在处理 stocks: 300750.SZ...
+2025-07-20 03:20:54,753 - QuantProject - INFO - initialize_database - 61 -   > 成功为 300750.SZ 加载了 1725 条日线数据。
+2025-07-20 03:20:54,753 - QuantProject - INFO - initialize_database - 65 - ===== 数据库初始化完成！ =====
+2025-07-20 03:20:56,771 - QuantProject - INFO - backfill_data - 18 - 开始执行数据回填任务: daily from 20220101 to 20250719
+2025-07-20 03:20:56,902 - QuantProject - INFO - backfill_data - 22 - 未指定股票列表，将回填全市场股票数据...
+2025-07-20 03:20:56,950 - QuantProject - INFO - backfill_data - 25 - 全市场共 5418 只股票。
+2025-07-20 03:22:56,781 - QuantProject - INFO - backfill_data - 38 - 处理进度: 100/5418
+2025-07-20 03:25:06,655 - QuantProject - INFO - backfill_data - 38 - 处理进度: 200/5418

@@ -489,6 +489,57 @@ class FactorFactory:
             return -1
         return 0
 
+    # --- G. V2.4新增：经典技术指标计算 ---
+    def _get_price_series(self, ts_code: str, end_date: str, lookback_days: int) -> pd.Series | None:
+        """获取用于计算技术指标的后复权价格序列的辅助函数"""
+        start_date = (pd.to_datetime(end_date) - pd.Timedelta(days=lookback_days)).strftime('%Y%m%d')
+        df_adj = self.data_manager.get_adjusted_daily(ts_code, start_date, end_date, adj='hfq')
+        if df_adj is None or df_adj.empty:
+            return None
+        return df_adj.set_index('trade_date')['close']
+
+    def calc_macd(self, ts_code: str, end_date: str) -> dict:
+        """计算MACD指标 (DIF, DEA, MACD柱)"""
+        prices = self._get_price_series(ts_code, end_date, 100)
+        if prices is None or len(prices) < 30:
+            return {'diff': np.nan, 'dea': np.nan, 'macd_hist': np.nan}
+        
+        exp12 = prices.ewm(span=12, adjust=False).mean()
+        exp26 = prices.ewm(span=26, adjust=False).mean()
+        diff = exp12 - exp26
+        dea = diff.ewm(span=9, adjust=False).mean()
+        macd_hist = (diff - dea) * 2
+        
+        return {'diff': diff.iloc[-1], 'dea': dea.iloc[-1], 'macd_hist': macd_hist.iloc[-1]}
+
+    def calc_rsi(self, ts_code: str, end_date: str, window: int = 14) -> float:
+        """计算RSI指标"""
+        prices = self._get_price_series(ts_code, end_date, 50)
+        if prices is None or len(prices) < window + 1:
+            return np.nan
+            
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+        
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi.iloc[-1]
+
+    def calc_boll(self, ts_code: str, end_date: str, window: int = 20) -> dict:
+        """计算布林带指标 (上轨, 中轨, 下轨)"""
+        prices = self._get_price_series(ts_code, end_date, 50)
+        if prices is None or len(prices) < window:
+            return {'upper': np.nan, 'middle': np.nan, 'lower': np.nan, 'close': np.nan}
+            
+        middle = prices.rolling(window=window).mean()
+        std = prices.rolling(window=window).std()
+        upper = middle + 2 * std
+        lower = middle - 2 * std
+        
+        return {'upper': upper.iloc[-1], 'middle': middle.iloc[-1], 'lower': lower.iloc[-1], 'close': prices.iloc[-1]}
+
+
 class FactorProcessor:
     """
     因子预处理流水线
@@ -1927,6 +1978,112 @@ class IndustryRotationStrategy:
         return final_portfolio
 
 # 主程序入口示例
+class HistoricalScorer:
+    """【V2.4 新增】历史得分计算器"""
+    def __init__(self, data_manager: data.DataManager, factor_processor: FactorProcessor):
+        self.dm = data_manager
+        self.fp = factor_processor
+        self.stock_basics = self.dm.get_stock_basic()
+
+    def calculate_financial_score_series(self, ts_code: str) -> pd.Series:
+        """计算单只股票的历史财务得分序列"""
+        all_fina = self.dm.get_fina_indicator(ts_code=ts_code)
+        if all_fina is None or all_fina.empty:
+            return pd.Series(dtype=float)
+
+        # 筛选核心财务因子并处理方向性
+        # 得分越高越好
+        score_factors = {
+            'roe': 1, 
+            'netprofit_yoy': 1, 
+            'or_yoy': 1,
+            'debt_to_assets': -1 # 负债率越低越好
+        }
+        
+        # 仅保留需要的列并转换为数值
+        fina_df = all_fina[['end_date'] + list(score_factors.keys())].copy()
+        for col in score_factors:
+            fina_df[col] = pd.to_numeric(fina_df[col], errors='coerce')
+        
+        fina_df = fina_df.dropna().set_index('end_date').sort_index()
+        if fina_df.empty:
+            return pd.Series(dtype=float)
+
+        # 对每个因子在历史序列中进行百分位排名 (0-1)
+        ranked_df = fina_df.rank(pct=True)
+        
+        # 根据方向性调整得分
+        for factor, direction in score_factors.items():
+            if direction == -1:
+                ranked_df[factor] = 1 - ranked_df[factor]
+        
+        # 等权合成最终得分 (0-100)
+        final_score = ranked_df.mean(axis=1) * 100
+        return final_score.rename("财务得分")
+
+    def calculate_fund_score_series(self, ts_code: str, start_date: str, end_date: str) -> pd.Series:
+        """计算单只股票的历史资金得分序列"""
+        query = f"""
+            SELECT trade_date, factor_name, factor_value
+            FROM factors_exposure
+            WHERE ts_code = '{ts_code}' 
+              AND trade_date BETWEEN '{start_date}' AND '{end_date}'
+              AND factor_name IN ('momentum', 'net_inflow_ratio', 'volatility')
+        """
+        with self.dm.engine.connect() as conn:
+            df = pd.read_sql(query, conn)
+
+        if df.empty:
+            return pd.Series(dtype=float)
+
+        df_wide = df.pivot(index='trade_date', columns='factor_name', values='factor_value')
+        df_wide['volatility'] = df_wide['volatility'] * -1 # 波动率越低越好
+        
+        # 对每日的因子值进行横向加权（此处简化为等权）
+        daily_score = df_wide.mean(axis=1)
+        
+        # 对日度得分进行平滑处理，例如7日移动平均
+        smoothed_score = daily_score.rolling(window=7, min_periods=1).mean()
+        
+        # 归一化到 0-100
+        normalized_score = (smoothed_score - smoothed_score.min()) / (smoothed_score.max() - smoothed_score.min()) * 100
+        return normalized_score.rename("资金得分")
+
+    def calculate_macro_score_series(self, start_date: str, end_date: str) -> pd.Series:
+        """计算宏观景气度得分序列"""
+        start_m = pd.to_datetime(start_date).strftime('%Y%m')
+        end_m = pd.to_datetime(end_date).strftime('%Y%m')
+
+        df_pmi = self.dm.get_cn_pmi(start_m, end_m)
+        df_m = self.dm.get_cn_m(start_m, end_m)
+
+        if df_pmi is None or df_m is None or df_pmi.empty or df_m.empty:
+            return pd.Series(dtype=float)
+
+        # 【鲁棒性修复】将列名统一转为小写，以兼容Tushare接口可能的大小写变动
+        df_pmi.columns = [col.lower() for col in df_pmi.columns]
+        df_m.columns = [col.lower() for col in df_m.columns]
+
+        df_pmi['month'] = pd.to_datetime(df_pmi['month'], format='%Y%m')
+        df_m['month'] = pd.to_datetime(df_m['month'], format='%Y%m')
+        df_macro = pd.merge(df_pmi[['month', 'pmi010000']], df_m[['month', 'm1_yoy', 'm2_yoy']], on='month')
+        
+        df_macro = df_macro.set_index('month').sort_index()
+        df_macro['pmi'] = pd.to_numeric(df_macro['pmi010000'])
+        df_macro['m1_m2_gap'] = df_macro['m1_yoy'] - df_macro['m2_yoy']
+
+        # 对PMI和M1-M2剪刀差进行Z-Score标准化
+        pmi_z = (df_macro['pmi'] - df_macro['pmi'].mean()) / df_macro['pmi'].std()
+        m_gap_z = (df_macro['m1_m2_gap'] - df_macro['m1_m2_gap'].mean()) / df_macro['m1_m2_gap'].std()
+
+        # 等权合成宏观分
+        macro_score = (pmi_z + m_gap_z) / 2
+        
+        # 归一化到 0-100
+        normalized_score = (macro_score - macro_score.min()) / (macro_score.max() - macro_score.min()) * 100
+        return normalized_score.rename("宏观景气分")
+
+
 if __name__ == '__main__':
     # #################################################
     # 演示【源于 main.py】的主工作流

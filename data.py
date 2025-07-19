@@ -13,6 +13,7 @@ import aiohttp
 import json
 
 import config
+from logger_config import log
 
 # --- 装饰器：用于缓存和API频率控制 ---
 def api_rate_limit(calls_per_minute=200):
@@ -43,7 +44,7 @@ class DataManager:
     """
     _API_URL = 'http://api.tushare.pro'
 
-    def __init__(self, token=config.TUSHARE_TOKEN, db_url=config.DATABASE_URL, concurrency_limit=10, requests_per_minute=200):
+    def __init__(self, token=config.TUSHARE_TOKEN, db_url=config.DATABASE_URL, concurrency_limit=4, requests_per_minute=50):
         if not token or token == "YOUR_TUSHARE_TOKEN":
             raise ValueError("Tushare Token未在config.py中配置。")
         self.pro = ts.pro_api(token)
@@ -321,24 +322,6 @@ class DataManager:
                 """))
                 connection.execute(sqlalchemy.text("SELECT create_hypertable('block_trade', 'trade_date', if_not_exists => TRUE);"))
 
-                # 【V2.1新增】业绩快报表
-                connection.execute(sqlalchemy.text("""
-                    CREATE TABLE IF NOT EXISTS express (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE,
-                        end_date DATE NOT NULL,
-                        revenue NUMERIC,
-                        operate_profit NUMERIC,
-                        total_profit NUMERIC,
-                        n_income NUMERIC,
-                        total_assets NUMERIC,
-                        yoy_op NUMERIC,
-                        yoy_gr NUMERIC,
-                        yoy_net_profit NUMERIC,
-                        PRIMARY KEY (ts_code, end_date)
-                    );
-                """))
-
             except ProgrammingError as e:
                 print(f"数据库初始化时发生已知错误（可能已初始化），可忽略: {e}")
             except Exception as e:
@@ -381,6 +364,18 @@ class DataManager:
     def get_stock_basic(self, list_status='L', force_update=False):
         return self._fetch_and_cache(self.pro.stock_basic, 'stock_basic', force_update=force_update, list_status=list_status)
     
+    @lru_cache(maxsize=1)
+    def get_industry_index_map(self):
+        """【V2.4新增】获取申万一级行业名称到指数代码的映射"""
+        try:
+            # Tushare的申万行业分类 level='L1', src='SW'
+            df = self.pro.index_classify(level='L1', src='SW')
+            if df is not None and not df.empty:
+                return df.set_index('industry_name')['index_code'].to_dict()
+        except Exception as e:
+            log.error(f"获取行业指数映射失败: {e}")
+        return {}
+
     def _fetch_and_cache_timeseries(self, table_name, date_column, api_func, ts_code, start_date, end_date, **kwargs):
         """
         【V2.0修正】为时序数据设计的增量更新缓存逻辑 (适配SQLAlchemy)。
@@ -503,12 +498,14 @@ class DataManager:
         if df_daily is None or df_daily.empty or df_adj is None or df_adj.empty:
             return None
         
-        # 确保 trade_date 列是 object/string 类型以便合并
-        df_daily['trade_date'] = df_daily['trade_date'].astype(str)
-        df_adj['trade_date'] = df_adj['trade_date'].astype(str)
+        # 【鲁棒性修复】确保 trade_date 列是 datetime 类型以便正确合并
+        df_daily['trade_date'] = pd.to_datetime(df_daily['trade_date'])
+        df_adj['trade_date'] = pd.to_datetime(df_adj['trade_date'])
 
         df = pd.merge(df_daily, df_adj, on='trade_date')
-        df['trade_date'] = pd.to_datetime(df['trade_date'])
+        if df.empty:
+            return None # 如果合并后为空，直接返回
+            
         df = df.sort_values('trade_date', ascending=True).reset_index(drop=True)
 
         if adj == 'qfq':
@@ -808,18 +805,6 @@ class DataManager:
             return final_df
 
         return pd.DataFrame()
-        if df_api is not None and not df_api.empty:
-            self._upsert_data(table_name, df_api, ['trade_date', 'ts_code', 'amount', 'buyer', 'seller'])
-        
-        # 从数据库读取返回
-        try:
-            query = sqlalchemy.text(f"SELECT * FROM {table_name} WHERE trade_date = :trade_date")
-            with self.engine.connect() as connection:
-                df_db = pd.read_sql(query, connection, params={'trade_date': trade_date})
-            return df_db
-        except Exception as e:
-            print(f"从 {table_name} 读取 {trade_date} 数据失败: {e}。")
-            return df_api
 
 
     # --- (五) 宏观经济 (同步) ---

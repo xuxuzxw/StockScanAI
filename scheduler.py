@@ -17,7 +17,6 @@ import quant_engine
 import intelligence
 import config
 from logger_config import log
-import factor_calculator # 【新增】导入新的因子计算模块
 from datetime import datetime
 
 # --- 启动调度器 ---

@@ -238,7 +238,7 @@ all_tabs_ordered = [
     "🎯 市场全景",
     "🏭 行业透视",
     "🏆 智能选股排名",
-    "📈 行情总览",
+    "📈 个股行情",
     "💰 资金与筹码",
     "🧾 深度财务",
     "🌐 宏观环境",
@@ -322,133 +322,133 @@ if tab_ranker:
     with tab_ranker:
         st.subheader("智能选股与行业轮动分析")
         st.markdown("构建您的专属多因子模型，系统将从**行业**和**个股**两个层面进行综合打分排名，助您实现“先选赛道、再选赛马”的专业投研。")
-    # --- 1. 获取最新交易日 ---
-    try:
-        cal_df = data_manager.pro.trade_cal(exchange='', start_date=(datetime.now() - timedelta(days=5)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
-        latest_trade_date = cal_df[cal_df['is_open'] == 1]['cal_date'].max()
-        st.info(f"数据基于最新已计算交易日: **{latest_trade_date}**")
-    except Exception as e:
-        st.error(f"无法获取最新交易日: {e}")
-        latest_trade_date = None
+        # --- 1. 获取最新交易日 ---
+        try:
+            cal_df = data_manager.pro.trade_cal(exchange='', start_date=(datetime.now() - timedelta(days=5)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
+            latest_trade_date = cal_df[cal_df['is_open'] == 1]['cal_date'].max()
+            st.info(f"数据基于最新已计算交易日: **{latest_trade_date}**")
+        except Exception as e:
+            st.error(f"无法获取最新交易日: {e}")
+            latest_trade_date = None
 
-    if latest_trade_date:
-        # --- 2. 用户选择因子与权重 ---
-        st.markdown("#### (1) 配置您的多因子模型")
-        # 【V2.2 重构】从统一的数据管道脚本中导入因子列表，确保源唯一
-        from run_daily_pipeline import FACTORS_TO_CALCULATE as available_factors
+        if latest_trade_date:
+            # --- 2. 用户选择因子与权重 ---
+            st.markdown("#### (1) 配置您的多因子模型")
+            # 【V2.2 重构】从统一的数据管道脚本中导入因子列表，确保源唯一
+            from run_daily_pipeline import FACTORS_TO_CALCULATE as available_factors
 
-        cols = st.columns(4)
-        factor_direction = {
-            'pe_ttm': -1, 'roe': 1, 'growth_revenue_yoy': 1, 'debt_to_assets': -1,
-            'momentum': 1, 'volatility': -1, 'net_inflow_ratio': 1,
-            'holder_num_change_ratio': -1, # 股东人数变化率越小越好
-            'major_shareholder_net_buy_ratio': 1, # 重要股东净增持比率越大越好
-            'top_list_net_buy_amount': 1, # 龙虎榜净买入额越大越好
-            'dividend_yield': 1, # 股息率越高越好
-            'forecast_growth_rate': 1, # 预告增长率越高越好
-            'repurchase_ratio': 1, # 回购比例越高越好
-            'block_trade_ratio': 1 # 大宗交易占比越高，说明该股可能在机构间关注度高
-        }
+            cols = st.columns(4)
+            factor_direction = {
+                'pe_ttm': -1, 'roe': 1, 'growth_revenue_yoy': 1, 'debt_to_assets': -1,
+                'momentum': 1, 'volatility': -1, 'net_inflow_ratio': 1,
+                'holder_num_change_ratio': -1, # 股东人数变化率越小越好
+                'major_shareholder_net_buy_ratio': 1, # 重要股东净增持比率越大越好
+                'top_list_net_buy_amount': 1, # 龙虎榜净买入额越大越好
+                'dividend_yield': 1, # 股息率越高越好
+                'forecast_growth_rate': 1, # 预告增长率越高越好
+                'repurchase_ratio': 1, # 回购比例越高越好
+                'block_trade_ratio': 1 # 大宗交易占比越高，说明该股可能在机构间关注度高
+            }
 
-        # --- V2.1 重构：明确定义因子分类列表 ---
-        VALUE_FACTORS = ['pe_ttm', 'dividend_yield', 'repurchase_ratio']
-        QUALITY_GROWTH_FACTORS = ['roe', 'growth_revenue_yoy', 'debt_to_assets', 'forecast_growth_rate']
-        TECH_FINANCE_FACTORS = ['momentum', 'volatility', 'net_inflow_ratio', 'block_trade_ratio']
-        CHIP_FACTORS = ['holder_num_change_ratio', 'major_shareholder_net_buy_ratio', 'top_list_net_buy_amount']
+            # --- V2.1 重构：明确定义因子分类列表 ---
+            VALUE_FACTORS = ['pe_ttm', 'dividend_yield', 'repurchase_ratio']
+            QUALITY_GROWTH_FACTORS = ['roe', 'growth_revenue_yoy', 'debt_to_assets', 'forecast_growth_rate']
+            TECH_FINANCE_FACTORS = ['momentum', 'volatility', 'net_inflow_ratio', 'block_trade_ratio']
+            CHIP_FACTORS = ['holder_num_change_ratio', 'major_shareholder_net_buy_ratio', 'top_list_net_buy_amount']
 
-        with cols[0]:
-            st.multiselect("价值/回报因子", [f for f in available_factors if f in VALUE_FACTORS], default=['pe_ttm', 'dividend_yield', 'repurchase_ratio'], key="value_factors")
-        with cols[1]:
-            st.multiselect("质量/成长因子", [f for f in available_factors if f in QUALITY_GROWTH_FACTORS], default=['roe', 'growth_revenue_yoy', 'forecast_growth_rate'], key="quality_factors")
-        with cols[2]:
-            st.multiselect("技术/资金因子", [f for f in available_factors if f in TECH_FINANCE_FACTORS], default=['momentum', 'net_inflow_ratio'], key="tech_factors")
-        with cols[3]:
-            st.multiselect("筹码因子", [f for f in available_factors if f in CHIP_FACTORS], default=['holder_num_change_ratio', 'major_shareholder_net_buy_ratio'], key="chip_factors")
+            with cols[0]:
+                st.multiselect("价值/回报因子", [f for f in available_factors if f in VALUE_FACTORS], default=['pe_ttm', 'dividend_yield', 'repurchase_ratio'], key="value_factors")
+            with cols[1]:
+                st.multiselect("质量/成长因子", [f for f in available_factors if f in QUALITY_GROWTH_FACTORS], default=['roe', 'growth_revenue_yoy', 'forecast_growth_rate'], key="quality_factors")
+            with cols[2]:
+                st.multiselect("技术/资金因子", [f for f in available_factors if f in TECH_FINANCE_FACTORS], default=['momentum', 'net_inflow_ratio'], key="tech_factors")
+            with cols[3]:
+                st.multiselect("筹码因子", [f for f in available_factors if f in CHIP_FACTORS], default=['holder_num_change_ratio', 'major_shareholder_net_buy_ratio'], key="chip_factors")
 
-        user_selection = st.session_state.value_factors + st.session_state.quality_factors + st.session_state.tech_factors + st.session_state.chip_factors
-        # --- 3. 执行排名 ---
-        if st.button("🚀 开始智能排名", use_container_width=True):
-            if not user_selection:
-                st.warning("请至少选择一个因子。")
-            else:
-                with st.spinner("正在从因子库提取数据并计算行业与个股综合得分..."):
-                    try:
-                        # --- A. 从数据库查询所有选中因子的数据 ---
-                        query = text(f"""
-                            SELECT ts_code, factor_name, factor_value
-                            FROM factors_exposure
-                            WHERE trade_date = '{latest_trade_date}'
-                            AND factor_name IN ({','.join([f"'{f}'" for f in user_selection])})
-                        """)
-                        with data_manager.engine.connect() as conn:
-                            all_factor_data = pd.read_sql(query, conn)
+            user_selection = st.session_state.value_factors + st.session_state.quality_factors + st.session_state.tech_factors + st.session_state.chip_factors
+            # --- 3. 执行排名 ---
+            if st.button("🚀 开始智能排名", use_container_width=True):
+                if not user_selection:
+                    st.warning("请至少选择一个因子。")
+                else:
+                    with st.spinner("正在从因子库提取数据并计算行业与个股综合得分..."):
+                        try:
+                            # --- A. 从数据库查询所有选中因子的数据 ---
+                            query = text(f"""
+                                SELECT ts_code, factor_name, factor_value
+                                FROM factors_exposure
+                                WHERE trade_date = '{latest_trade_date}'
+                                AND factor_name IN ({','.join([f"'{f}'" for f in user_selection])})
+                            """)
+                            with data_manager.engine.connect() as conn:
+                                all_factor_data = pd.read_sql(query, conn)
 
-                        # --- B. 数据处理：将长表转换为宽表 ---
-                        factor_table = all_factor_data.pivot(index='ts_code', columns='factor_name', values='factor_value').dropna()
+                            # --- B. 数据处理：将长表转换为宽表 ---
+                            factor_table = all_factor_data.pivot(index='ts_code', columns='factor_name', values='factor_value').dropna()
 
-                        # --- C. 合并行业信息 ---
-                        full_stock_list = get_stock_list()
-                        factor_table_with_industry = factor_table.merge(full_stock_list[['ts_code', 'name', 'industry']], on='ts_code')
+                            # --- C. 合并行业信息 ---
+                            full_stock_list = get_stock_list()
+                            factor_table_with_industry = factor_table.merge(full_stock_list[['ts_code', 'name', 'industry']], on='ts_code')
 
-                        # --- D. 【新增】计算行业综合得分 ---
-                        st.markdown("---")
-                        st.markdown("#### (2) 行业综合得分排名")
-                        industry_factors = factor_table_with_industry.groupby('industry')[user_selection].mean()
-                        processed_industry_factors = industry_factors.apply(lambda x: (x - x.mean()) / x.std())
-                        for factor, direction in factor_direction.items():
-                            if factor in processed_industry_factors.columns:
-                                processed_industry_factors[factor] *= direction
-                        processed_industry_factors['行业综合得分'] = processed_industry_factors.mean(axis=1)
-                        industry_rank = processed_industry_factors.sort_values('行业综合得分', ascending=False)
+                            # --- D. 【新增】计算行业综合得分 ---
+                            st.markdown("---")
+                            st.markdown("#### (2) 行业综合得分排名")
+                            industry_factors = factor_table_with_industry.groupby('industry')[user_selection].mean()
+                            processed_industry_factors = industry_factors.apply(lambda x: (x - x.mean()) / x.std())
+                            for factor, direction in factor_direction.items():
+                                if factor in processed_industry_factors.columns:
+                                    processed_industry_factors[factor] *= direction
+                            processed_industry_factors['行业综合得分'] = processed_industry_factors.mean(axis=1)
+                            industry_rank = processed_industry_factors.sort_values('行业综合得分', ascending=False)
 
-                        st.dataframe(industry_rank.style.format('{:.2f}'))
-                        st.bar_chart(industry_rank['行业综合得分'].head(15))
+                            st.dataframe(industry_rank.style.format('{:.2f}'))
+                            st.bar_chart(industry_rank['行业综合得分'].head(15))
 
-                        # --- E. 计算个股综合得分 ---
-                        st.markdown("---")
-                        st.markdown("#### (3) 个股综合得分排名")
-                        processed_stock_factors = factor_table.apply(lambda x: (x - x.mean()) / x.std())
-                        for factor, direction in factor_direction.items():
-                            if factor in processed_stock_factors.columns:
-                                processed_stock_factors[factor] *= direction
-                        processed_stock_factors['综合得分'] = processed_stock_factors.mean(axis=1)
+                            # --- E. 计算个股综合得分 ---
+                            st.markdown("---")
+                            st.markdown("#### (3) 个股综合得分排名")
+                            processed_stock_factors = factor_table.apply(lambda x: (x - x.mean()) / x.std())
+                            for factor, direction in factor_direction.items():
+                                if factor in processed_stock_factors.columns:
+                                    processed_stock_factors[factor] *= direction
+                            processed_stock_factors['综合得分'] = processed_stock_factors.mean(axis=1)
 
-                        final_rank = processed_stock_factors.merge(full_stock_list[['ts_code', 'name', 'industry']], on='ts_code')
-                        final_rank = final_rank.sort_values('综合得分', ascending=False).reset_index(drop=True)
+                            final_rank = processed_stock_factors.merge(full_stock_list[['ts_code', 'name', 'industry']], on='ts_code')
+                            final_rank = final_rank.sort_values('综合得分', ascending=False).reset_index(drop=True)
 
-                        # --- F. 个股结果展示与交互 ---
-                        final_rank_display = final_rank[['ts_code', 'name', 'industry', '综合得分']].head(100)
-                        
-                        st.caption("💡 小提示：直接点击下方表格中的任意一行，系统将自动跳转到该股票的深度分析页面。")
-
-                        # 【交互修复】使用 st.data_editor 替代 st.dataframe，以捕获行选择事件
-                        # 将选择状态存储在 session_state 中
-                        if "selected_rank_row" not in st.session_state:
-                            st.session_state.selected_rank_row = None
-                        
-                        edited_df = st.data_editor(
-                            final_rank_display, 
-                            hide_index=True, 
-                            disabled=final_rank_display.columns, # 设置所有列为不可编辑
-                            on_select="rerun", # 当选择变化时，重新运行脚本
-                            key="rank_selector"
-                        )
-
-                        # 检查是否有行被选中
-                        if st.session_state.rank_selector and st.session_state.rank_selector.get("selection", {}).get("rows"):
-                            selected_index = st.session_state.rank_selector["selection"]["rows"][0]
-                            selected_row = final_rank_display.iloc[selected_index]
+                            # --- F. 个股结果展示与交互 ---
+                            final_rank_display = final_rank[['ts_code', 'name', 'industry', '综合得分']].head(100)
                             
-                            selected_ts_code = selected_row['ts_code']
-                            selected_name = selected_row['name']
-                            
-                            # 更新全局 session_state 并触发重跑，让侧边栏的 selectbox 更新
-                            st.session_state.selected_stock = f"{selected_ts_code} {selected_name}"
-                            st.rerun()
+                            st.caption("💡 小提示：直接点击下方表格中的任意一行，系统将自动跳转到该股票的深度分析页面。")
 
-                    except Exception as e:
-                        st.error(f"排名计算过程中发生错误: {e}")
-                        st.exception(e)
+                            # 【交互修复】使用 st.data_editor 替代 st.dataframe，以捕获行选择事件
+                            # 将选择状态存储在 session_state 中
+                            if "selected_rank_row" not in st.session_state:
+                                st.session_state.selected_rank_row = None
+                            
+                            edited_df = st.data_editor(
+                                final_rank_display, 
+                                hide_index=True, 
+                                disabled=final_rank_display.columns, # 设置所有列为不可编辑
+                                on_select="rerun", # 当选择变化时，重新运行脚本
+                                key="rank_selector"
+                            )
+
+                            # 检查是否有行被选中
+                            if st.session_state.rank_selector and st.session_state.rank_selector.get("selection", {}).get("rows"):
+                                selected_index = st.session_state.rank_selector["selection"]["rows"][0]
+                                selected_row = final_rank_display.iloc[selected_index]
+                                
+                                selected_ts_code = selected_row['ts_code']
+                                selected_name = selected_row['name']
+                                
+                                # 更新全局 session_state 并触发重跑，让侧边栏的 selectbox 更新
+                                st.session_state.selected_stock = f"{selected_ts_code} {selected_name}"
+                                st.rerun()
+
+                        except Exception as e:
+                            st.error(f"排名计算过程中发生错误: {e}")
+                            st.exception(e)
 
 # --- 2. 行情总览 ---
 if tab_main:
@@ -514,184 +514,210 @@ if tab_funds:
     with tab_funds:
         st.subheader("资金流向 & 股东结构 (V2.1 增强)")
 
-    # --- Part 1: 原有资金流分析 ---
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**主力资金流 (近30日)**")
-        df_flow = data_manager.get_moneyflow(ts_code, (end_date - timedelta(days=30)).strftime('%Y%m%d'), end_date_str)
-        if df_flow is not None and not df_flow.empty:
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=df_flow['trade_date'], y=df_flow['net_mf_amount'], name='净流入额'))
-            fig.update_layout(title="主力资金净流入(万元)", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        st.markdown("**北向资金持股比例**")
-        df_hk = data_manager.get_hk_hold(ts_code, start_date_str, end_date_str)
-        if df_hk is not None and not df_hk.empty:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_hk['trade_date'], y=df_hk['ratio'], mode='lines', name='持股比例(%)'))
-            fig.update_layout(title="北向资金持股比例(%)", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(fig, use_container_width=True)
+        # --- Part 1: 原有资金流分析 ---
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**主力资金流 (近30日)**")
+            df_flow = data_manager.get_moneyflow(ts_code, (end_date - timedelta(days=30)).strftime('%Y%m%d'), end_date_str)
+            if df_flow is not None and not df_flow.empty:
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=df_flow['trade_date'], y=df_flow['net_mf_amount'], name='净流入额'))
+                fig.update_layout(title="主力资金净流入(万元)", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            st.markdown("**北向资金持股比例**")
+            df_hk = data_manager.get_hk_hold(ts_code, start_date_str, end_date_str)
+            if df_hk is not None and not df_hk.empty:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_hk['trade_date'], y=df_hk['ratio'], mode='lines', name='持股比例(%)'))
+                fig.update_layout(title="北向资金持股比例(%)", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("---")
-    # --- Part 2: V2.1 新增筹码分析 ---
-    col3, col4 = st.columns(2)
-    with col3:
-        st.markdown("**股东人数变化趋势**")
-        df_holder_num = data_manager.get_holder_number(ts_code)
-        if df_holder_num is not None and not df_holder_num.empty and len(df_holder_num) > 1:
-            df_holder_num['end_date'] = pd.to_datetime(df_holder_num['end_date'])
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_holder_num['end_date'], y=df_holder_num['holder_num'], mode='lines+markers', name='股东人数'))
-            fig.update_layout(title="股东人数", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("暂无足够的股东人数数据。")
-
-    with col4:
-        st.markdown("**龙虎榜净买入 (近90日)**")
-        df_top_list_hist = data_manager.get_top_list(start_date=(end_date - timedelta(days=90)).strftime('%Y%m%d'), end_date=end_date_str)
-        if df_top_list_hist is not None and not df_top_list_hist.empty:
-            df_top_list_hist['trade_date'] = pd.to_datetime(df_top_list_hist['trade_date'])
-            stock_top_list = df_top_list_hist[df_top_list_hist['ts_code'] == ts_code]
-            if not stock_top_list.empty:
-                 fig = go.Figure()
-                 fig.add_trace(go.Bar(x=stock_top_list['trade_date'], y=stock_top_list['net_amount'], name='龙虎榜净买入额'))
-                 fig.update_layout(title="龙虎榜净买入(万元)", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
-                 st.plotly_chart(fig, use_container_width=True)
+        st.markdown("---")
+        # --- Part 2: V2.1 新增筹码分析 ---
+        col3, col4 = st.columns(2)
+        with col3:
+            st.markdown("**股东人数变化趋势**")
+            df_holder_num = data_manager.get_holder_number(ts_code)
+            if df_holder_num is not None and not df_holder_num.empty and len(df_holder_num) > 1:
+                df_holder_num['end_date'] = pd.to_datetime(df_holder_num['end_date'])
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_holder_num['end_date'], y=df_holder_num['holder_num'], mode='lines+markers', name='股东人数'))
+                fig.update_layout(title="股东人数", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig, use_container_width=True)
             else:
-                 st.info("该股近90日未登上龙虎榜。")
+                st.warning("暂无足够的股东人数数据。")
+
+        with col4:
+            st.markdown("**龙虎榜净买入 (近90日)**")
+            df_top_list_hist = data_manager.get_top_list(start_date=(end_date - timedelta(days=90)).strftime('%Y%m%d'), end_date=end_date_str)
+            if df_top_list_hist is not None and not df_top_list_hist.empty:
+                df_top_list_hist['trade_date'] = pd.to_datetime(df_top_list_hist['trade_date'])
+                stock_top_list = df_top_list_hist[df_top_list_hist['ts_code'] == ts_code]
+                if not stock_top_list.empty:
+                     fig = go.Figure()
+                     fig.add_trace(go.Bar(x=stock_top_list['trade_date'], y=stock_top_list['net_amount'], name='龙虎榜净买入额'))
+                     fig.update_layout(title="龙虎榜净买入(万元)", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
+                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                     st.info("该股近90日未登上龙虎榜。")
+            else:
+                st.warning("暂无龙虎榜数据。")
+
+        st.markdown("**重要股东增减持 (近一年)**")
+        df_holder_trade = data_manager.get_holder_trade(ts_code, start_date= (end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+        if df_holder_trade is not None and not df_holder_trade.empty:
+            df_display = df_holder_trade.sort_values(by='ann_date', ascending=True)
+            df_display = df_display[['ann_date', 'holder_name', 'in_de', 'change_ratio', 'avg_price']].rename(columns=COLUMN_MAPPING)
+            st.dataframe(df_display, use_container_width=True)
         else:
-            st.warning("暂无龙虎榜数据。")
+            st.info("该股近一年无重要股东增减持记录。")
 
-    st.markdown("**重要股东增减持 (近一年)**")
-    df_holder_trade = data_manager.get_holder_trade(ts_code, start_date= (end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
-    if df_holder_trade is not None and not df_holder_trade.empty:
-        df_display = df_holder_trade.sort_values(by='ann_date', ascending=True)
-        df_display = df_display[['ann_date', 'holder_name', 'in_de', 'change_ratio', 'avg_price']].rename(columns=COLUMN_MAPPING)
-        st.dataframe(df_display, use_container_width=True)
-    else:
-        st.info("该股近一年无重要股东增减持记录。")
-
-    st.markdown("**大宗交易明细 (近90日)**")
-    df_block_trade = data_manager.get_block_trade(start_date=(end_date - timedelta(days=90)).strftime('%Y%m%d'), end_date=end_date_str)
-    if df_block_trade is not None and not df_block_trade.empty:
-        stock_block_trade = df_block_trade[df_block_trade['ts_code'] == ts_code]
-        if not stock_block_trade.empty:
-            df_display = stock_block_trade.sort_values(by='trade_date', ascending=True)
-            # 修正：'price'列已加入翻译字典
-            df_display = df_display[['trade_date', 'price', 'vol', 'amount', 'buyer', 'seller']].rename(columns=COLUMN_MAPPING)
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        st.markdown("**大宗交易明细 (近90日)**")
+        df_block_trade = data_manager.get_block_trade(start_date=(end_date - timedelta(days=90)).strftime('%Y%m%d'), end_date=end_date_str)
+        if df_block_trade is not None and not df_block_trade.empty:
+            stock_block_trade = df_block_trade[df_block_trade['ts_code'] == ts_code]
+            if not stock_block_trade.empty:
+                df_display = stock_block_trade.sort_values(by='trade_date', ascending=True)
+                # 修正：'price'列已加入翻译字典
+                df_display = df_display[['trade_date', 'price', 'vol', 'amount', 'buyer', 'seller']].rename(columns=COLUMN_MAPPING)
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+            else:
+                st.info("该股近90日无大宗交易记录。")
         else:
-            st.info("该股近90日无大宗交易记录。")
-    else:
-        st.info("近90日无大宗交易记录。")
+            st.info("近90日无大宗交易记录。")
 
 
-    st.markdown("**前十大流通股东 (最新报告期)**")
-    # ... (原有获取十大股东的代码保持不变) ...
-    latest_period = ""
-    for year_offset in range(2):
-        year = end_date.year - year_offset
-        periods = [f"{year}1231", f"{year}0930", f"{year}0630", f"{year}0331"]
-        for p in periods:
-            if p <= end_date.strftime('%Y%m%d'):
-                df_holders = data_manager.get_top10_floatholders(ts_code, p)
-                if df_holders is not None and not df_holders.empty:
-                    latest_period = p
-                    break
+        st.markdown("**前十大流通股东 (最新报告期)**")
+        # ... (原有获取十大股东的代码保持不变) ...
+        latest_period = ""
+        for year_offset in range(2):
+            year = end_date.year - year_offset
+            periods = [f"{year}1231", f"{year}0930", f"{year}0630", f"{year}0331"]
+            for p in periods:
+                if p <= end_date.strftime('%Y%m%d'):
+                    df_holders = data_manager.get_top10_floatholders(ts_code, p)
+                    if df_holders is not None and not df_holders.empty:
+                        latest_period = p
+                        break
+            if latest_period:
+                break
+
         if latest_period:
-            break
-
-    if latest_period:
-        st.info(f"当前显示财报周期: {latest_period}")
-        # 修正：确保所有列都被翻译
-        df_display = df_holders.rename(columns=COLUMN_MAPPING)
-        st.dataframe(df_display, use_container_width=True, height=385, hide_index=True)
-    else:
-        st.warning("未能获取前十大流通股东数据。")
+            st.info(f"当前显示财报周期: {latest_period}")
+            # 修正：确保所有列都被翻译
+            df_display = df_holders.rename(columns=COLUMN_MAPPING)
+            st.dataframe(df_display, use_container_width=True, height=385, hide_index=True)
+        else:
+            st.warning("未能获取前十大流通股东数据。")
 
 # --- 3. 深度财务 ---
 if tab_finance:
     with tab_finance:
         st.subheader("财务报表与前瞻指标 (V2.1 增强)")
+        
+        # V2.4 新增：历史财务得分
+        st.markdown("#### 历史财务表现得分")
+        with st.spinner("正在计算历史财务得分..."):
+            scorer = quant_engine.HistoricalScorer(data_manager, factor_processor)
+            financial_score_series = scorer.calculate_financial_score_series(ts_code)
+            if not financial_score_series.empty:
+                st.line_chart(financial_score_series)
+                st.caption("得分基于ROE、营收增长、净利增长和资产负债率等指标的历史百分位排名等权合成。")
+            else:
+                st.info("暂无足够的历史财务数据生成得分图。")
+        st.markdown("---")
 
-    # --- Part 1: V2.1 新增财务前瞻 ---
-    st.markdown(f"**业绩快报 (最新)**")
-    # --- V2.1 重构：创建一个统一的函数来处理转置和翻译 ---
-    def display_transposed_df(df: pd.DataFrame):
-        if df is None or df.empty:
-            return
-        # 确保只处理单行数据
-        if len(df) > 1:
-             df = df.sort_values(by='ann_date', ascending=False).head(1)
 
-        df_display = df.T.reset_index()
-        df_display.columns = ['指标', '数值']
-        # 核心修正：使用我们强大的新字典来翻译“指标”列
-        df_display['指标'] = df_display['指标'].map(COLUMN_MAPPING).fillna(df_display['指标'])
-        df_display['数值'] = df_display['数值'].astype(str)
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        # --- Part 1: V2.1 新增财务前瞻 ---
+        st.markdown(f"**业绩快报 (最新)**")
+        # --- V2.1 重构：创建一个统一的函数来处理转置和翻译 ---
+        def display_transposed_df(df: pd.DataFrame):
+            if df is None or df.empty:
+                return
+            # 确保只处理单行数据
+            if len(df) > 1:
+                 df = df.sort_values(by='ann_date', ascending=False).head(1)
 
-    df_express = data_manager.get_express(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
-    if df_express is not None and not df_express.empty:
-        df_express['ann_date'] = pd.to_datetime(df_express['ann_date'])
-        latest_pit_express = df_express[df_express['ann_date'] <= end_date].sort_values(by='ann_date', ascending=False).head(1)
-        if not latest_pit_express.empty:
-            display_transposed_df(latest_pit_express)
+            df_display = df.T.reset_index()
+            df_display.columns = ['指标', '数值']
+            # 核心修正：使用我们强大的新字典来翻译“指标”列
+            df_display['指标'] = df_display['指标'].map(COLUMN_MAPPING).fillna(df_display['指标'])
+            df_display['数值'] = df_display['数值'].astype(str)
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+        df_express = data_manager.get_express(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+        if df_express is not None and not df_express.empty:
+            df_express['ann_date'] = pd.to_datetime(df_express['ann_date'])
+            latest_pit_express = df_express[df_express['ann_date'] <= end_date].sort_values(by='ann_date', ascending=False).head(1)
+            if not latest_pit_express.empty:
+                display_transposed_df(latest_pit_express)
+            else:
+                st.info("近一年无已披露的业绩快报。")
         else:
-            st.info("近一年无已披露的业绩快报。")
-    else:
-        st.info("近一年无业绩快报。")
+            st.info("近一年无业绩快报。")
 
-    st.markdown(f"**业绩预告 (最新)**")
-    df_forecast = data_manager.get_forecast(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
-    if df_forecast is not None and not df_forecast.empty:
-        df_forecast['ann_date'] = pd.to_datetime(df_forecast['ann_date'])
-        latest_pit_forecast = df_forecast[df_forecast['ann_date'] <= end_date].sort_values(by='ann_date', ascending=False).head(1)
-        if not latest_pit_forecast.empty:
-            display_transposed_df(latest_pit_forecast)
+        st.markdown(f"**业绩预告 (最新)**")
+        df_forecast = data_manager.get_forecast(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+        if df_forecast is not None and not df_forecast.empty:
+            df_forecast['ann_date'] = pd.to_datetime(df_forecast['ann_date'])
+            latest_pit_forecast = df_forecast[df_forecast['ann_date'] <= end_date].sort_values(by='ann_date', ascending=False).head(1)
+            if not latest_pit_forecast.empty:
+                display_transposed_df(latest_pit_forecast)
+            else:
+                st.info("近一年无已披露的业绩预告。")
         else:
-            st.info("近一年无已披露的业绩预告。")
-    else:
-        st.info("近一年无业绩预告。")
+            st.info("近一年无业绩预告。")
 
-    st.markdown(f"**历史分红**")
-    df_dividend = data_manager.get_dividend(ts_code)
-    if df_dividend is not None and not df_dividend.empty:
-        df_display = df_dividend.sort_values(by='end_date', ascending=True)
-        df_display = df_display[['end_date', 'ann_date', 'div_proc', 'stk_div', 'cash_div_tax']].rename(columns=COLUMN_MAPPING)
-        st.dataframe(df_display.head(), use_container_width=True, hide_index=True)
-    else:
-        st.info("无历史分红记录。")
+        st.markdown(f"**历史分红**")
+        df_dividend = data_manager.get_dividend(ts_code)
+        if df_dividend is not None and not df_dividend.empty:
+            df_display = df_dividend.sort_values(by='end_date', ascending=True)
+            df_display = df_display[['end_date', 'ann_date', 'div_proc', 'stk_div', 'cash_div_tax']].rename(columns=COLUMN_MAPPING)
+            st.dataframe(df_display.head(), use_container_width=True, hide_index=True)
+        else:
+            st.info("无历史分红记录。")
 
-    st.markdown(f"**股票回购记录 (近一年)**")
-    df_repurchase = data_manager.get_repurchase(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
-    if df_repurchase is not None and not df_repurchase.empty:
-        df_display = df_repurchase.sort_values(by='ann_date', ascending=True)
-        df_display = df_display[['ann_date', 'proc', 'vol', 'amount', 'high_limit', 'low_limit']].rename(columns=COLUMN_MAPPING)
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-    else:
-        st.info("近一年无股票回购记录。")
+        st.markdown(f"**股票回购记录 (近一年)**")
+        df_repurchase = data_manager.get_repurchase(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+        if df_repurchase is not None and not df_repurchase.empty:
+            df_display = df_repurchase.sort_values(by='ann_date', ascending=True)
+            df_display = df_display[['ann_date', 'proc', 'vol', 'amount', 'high_limit', 'low_limit']].rename(columns=COLUMN_MAPPING)
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("近一年无股票回购记录。")
 
-    st.markdown("---")
-    st.markdown("**财务报表核心数据**")
-    # --- Part 2: 原有财务报表 ---
-    if 'latest_period' in locals() and latest_period:
-        st.markdown(f"**利润表 ({latest_period})**")
-        df_income = data_manager.get_income(ts_code, latest_period)
-        display_transposed_df(df_income)
+        st.markdown("---")
+        st.markdown("**财务报表核心数据**")
+        # --- Part 2: 原有财务报表 ---
+        if 'latest_period' in locals() and latest_period:
+            st.markdown(f"**利润表 ({latest_period})**")
+            df_income = data_manager.get_income(ts_code, latest_period)
+            display_transposed_df(df_income)
 
-        st.markdown(f"**资产负债表 ({latest_period})**")
-        df_balance = data_manager.get_balancesheet(ts_code, latest_period)
-        display_transposed_df(df_balance)
-    else:
-        st.warning("未能确定最新的财报周期，无法加载财务报表。")
+            st.markdown(f"**资产负债表 ({latest_period})**")
+            df_balance = data_manager.get_balancesheet(ts_code, latest_period)
+            display_transposed_df(df_balance)
+        else:
+            st.warning("未能确定最新的财报周期，无法加载财务报表。")
 
 # --- 4. 宏观环境 ---
 if tab_macro:
     with tab_macro:
         st.subheader("宏观经济指标")
+
+        # V2.4 新增：历史宏观景气得分
+        st.markdown("#### 历史宏观景气得分")
+        with st.spinner("正在计算历史宏观景气得分..."):
+            scorer = quant_engine.HistoricalScorer(data_manager, factor_processor)
+            macro_score_series = scorer.calculate_macro_score_series(start_date_str, end_date_str)
+            if not macro_score_series.empty:
+                st.area_chart(macro_score_series)
+                st.caption("得分基于PMI和M1-M2剪刀差等核心宏观指标的标准化值合成。")
+            else:
+                st.info("暂无足够的历史宏观数据生成得分图。")
+        st.markdown("---")
+
         start_m = f"{end_date.year-2}{end_date.month:02d}"
         end_m = f"{end_date.year}{end_date.month:02d}"
         df_pmi = data_manager.get_cn_pmi(start_m, end_m)
@@ -768,7 +794,50 @@ if V2_MODULES_LOADED and tab_market:
 # --- V2.0 新增: 行业透视 ---
 if V2_MODULES_LOADED and tab_industry:
     with tab_industry:
-        st.subheader("行业因子排名与轮动分析")
+        st.subheader("行业透视与轮动分析")
+        
+        # --- V2.4 升级：增加行业行情分析 ---
+        st.markdown("#### (1) 行业板块行情与技术指标")
+        
+        industry_map = data_manager.get_industry_index_map()
+        if not industry_map:
+            st.warning("无法获取行业列表，请检查Tushare接口或网络。")
+        else:
+            selected_industry = st.selectbox("选择要分析的行业板块:", options=list(industry_map.keys()))
+            industry_index_code = industry_map.get(selected_industry)
+
+            if industry_index_code:
+                with st.spinner(f"正在加载 {selected_industry} ({industry_index_code}) 的行情数据..."):
+                    # 调用 get_index_daily 获取行业指数数据
+                    df_industry = data_manager.get_index_daily(industry_index_code, start_date_str, end_date_str)
+                    
+                    if df_industry is not None and not df_industry.empty:
+                        # --- 复用个股行情的K线绘图逻辑 ---
+                        df_industry['EMA20'] = df_industry['close'].ewm(span=20, adjust=False).mean()
+                        df_industry['EMA60'] = df_industry['close'].ewm(span=60, adjust=False).mean()
+                        df_industry['Vol_EMA20'] = df_industry['vol'].ewm(span=20, adjust=False).mean()
+
+                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
+                        
+                        fig.add_trace(go.Candlestick(x=df_industry['trade_date'], open=df_industry['open'], high=df_industry['high'], low=df_industry['low'], close=df_industry['close'], name='行业指数K线'), row=1, col=1)
+                        fig.add_trace(go.Scatter(x=df_industry['trade_date'], y=df_industry['EMA20'], mode='lines', name='EMA20', line=dict(color='yellow', width=1)), row=1, col=1)
+                        fig.add_trace(go.Scatter(x=df_industry['trade_date'], y=df_industry['EMA60'], mode='lines', name='EMA60', line=dict(color='cyan', width=1)), row=1, col=1)
+
+                        fig.add_trace(go.Bar(x=df_industry['trade_date'], y=df_industry['vol'], name='成交量', marker_color='lightblue'), row=2, col=1)
+                        fig.add_trace(go.Scatter(x=df_industry['trade_date'], y=df_industry['Vol_EMA20'], mode='lines', name='成交量EMA20', line=dict(color='orange', width=1)), row=2, col=1)
+
+                        fig.update_layout(
+                            title_text=f"{selected_industry} 板块指数行情",
+                            xaxis_rangeslider_visible=False,
+                            template="plotly_dark",
+                            height=600
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning(f"未能获取 {selected_industry} 的行情数据。")
+
+        st.markdown("---")
+        st.markdown("#### (2) 行业因子排名与轮动分析")
         st.markdown("计算全市场所有申万一级行业的平均因子暴露值，并进行排序，用于发现强势或弱势行业。")
 
         # 1. 初始化行业分析器
@@ -955,374 +1024,374 @@ if tab_backtest:
 
         backtest_type = st.radio("选择回测类型:", ("向量化回测 (速度快，适合多因子)", "事件驱动回测 (精度高，模拟真实交易)"))
 
-    if backtest_type == "向量化回测 (速度快，适合多因子)":
-        st.markdown("---")
-        st.markdown("构建多因子策略，通过投资组合优化器生成权重，并在考虑交易成本和风控规则下进行回测。")
+        if backtest_type == "向量化回测 (速度快，适合多因子)":
+            st.markdown("---")
+            st.markdown("构建多因子策略，通过投资组合优化器生成权重，并在考虑交易成本和风控规则下进行回测。")
 
-        st.markdown("#### 1. 选择策略模型")
+            st.markdown("#### 1. 选择策略模型")
 
-        # V2.2 核心升级：增加策略选择
-        strategy_model = st.radio(
-            "选择策略模型:",
-            ["固定权重多因子", "自适应权重 (IC-IR)", "机器学习 (LGBM)"],
-            horizontal=True,
-            help="""
-            - **固定权重多因子**: 手动为多个因子设定固定权重，构建一个静态的选股模型。
-            - **自适应权重 (IC-IR)**: 系统会动态计算每个因子在过去的表现（ICIR），并自动为表现好的因子分配更高的权重，实现模型的动态择优。
-            """
-        )
-
-        st.markdown("#### 2. 配置因子与参数")
-
-        # --- 策略参数配置区 ---
-        if strategy_model == "固定权重多因子":
-            st.markdown("##### (A) 手动设置固定权重")
-            factor_weights = {}
-            factor_weights['momentum'] = st.slider("动量因子 (Momentum) 权重:", -1.0, 1.0, 0.5, 0.1)
-            factor_weights['volatility'] = st.slider("低波动因子 (Volatility) 权重:", -1.0, 1.0, -0.3, 0.1) # 权重为负代表选取波动率低的
-            factor_weights['net_inflow_ratio'] = st.slider("资金流入因子 (Net Inflow) 权重:", -1.0, 1.0, 0.2, 0.1)
-
-        elif strategy_model == "自适应权重 (IC-IR)":
-            st.markdown("##### (A) 选择因子池并配置自适应参数")
-            factors_to_use_adaptive = st.multiselect(
-                "选择纳入自适应权重模型的因子池:",
-                options=['momentum', 'volatility', 'net_inflow_ratio', 'roe', 'pe_ttm', 'growth_revenue_yoy'],
-                default=['momentum', 'pe_ttm', 'roe']
+            # V2.2 核心升级：增加策略选择
+            strategy_model = st.radio(
+                "选择策略模型:",
+                ["固定权重多因子", "自适应权重 (IC-IR)", "机器学习 (LGBM)"],
+                horizontal=True,
+                help="""
+                - **固定权重多因子**: 手动为多个因子设定固定权重，构建一个静态的选股模型。
+                - **自适应权重 (IC-IR)**: 系统会动态计算每个因子在过去的表现（ICIR），并自动为表现好的因子分配更高的权重，实现模型的动态择优。
+                """
             )
-            ic_lookback_days = st.slider("IC/IR 计算回看期 (天):", 30, 365, 180, 10)
 
-        st.markdown("#### 3. 配置回测参数")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            bt_start_date = st.date_input("回测开始日期", datetime(2023, 1, 1), key="bt_start")
-        with col2:
-            bt_end_date = st.date_input("回测结束日期", datetime.now() - timedelta(days=1), key="bt_end")
-        with col3:
-            rebalance_freq = st.selectbox("调仓频率", ['M', 'W'], index=0, help="M=月度调仓, W=周度调仓")
+            st.markdown("#### 2. 配置因子与参数")
 
-        st.markdown("#### 4. 配置交易与风控规则")
-        col4, col5, col6 = st.columns(3)
-        with col4:
-            commission = st.number_input("手续费率(%)", 0.0, 1.0, 0.03, 0.01) / 100
-        with col5:
-            max_weight = st.number_input("单票最大权重(%)", 1.0, 100.0, 10.0, 1.0) / 100
-        with col6:
-            stop_loss = st.number_input("止损线(%)", 0.0, 50.0, 15.0, 1.0, help="0表示不止损") / 100
-            stop_loss = stop_loss if stop_loss > 0 else None
+            # --- 策略参数配置区 ---
+            if strategy_model == "固定权重多因子":
+                st.markdown("##### (A) 手动设置固定权重")
+                factor_weights = {}
+                factor_weights['momentum'] = st.slider("动量因子 (Momentum) 权重:", -1.0, 1.0, 0.5, 0.1)
+                factor_weights['volatility'] = st.slider("低波动因子 (Volatility) 权重:", -1.0, 1.0, -0.3, 0.1) # 权重为负代表选取波动率低的
+                factor_weights['net_inflow_ratio'] = st.slider("资金流入因子 (Net Inflow) 权重:", -1.0, 1.0, 0.2, 0.1)
 
-        if st.button("🚀 开始优化并回测"):
-            with st.spinner("正在执行向量化回测..."):
-                try:
-                    # --- 1. 数据准备 ---
-                    st.info("步骤1: 准备股票池和价格数据...")
-                    stock_pool = get_stock_list()['ts_code'].tolist()[:100] # 缩小范围以提高速度
-                    bt_start_str = bt_start_date.strftime('%Y%m%d')
-                    bt_end_str = bt_end_date.strftime('%Y%m%d')
+            elif strategy_model == "自适应权重 (IC-IR)":
+                st.markdown("##### (A) 选择因子池并配置自适应参数")
+                factors_to_use_adaptive = st.multiselect(
+                    "选择纳入自适应权重模型的因子池:",
+                    options=['momentum', 'volatility', 'net_inflow_ratio', 'roe', 'pe_ttm', 'growth_revenue_yoy'],
+                    default=['momentum', 'pe_ttm', 'roe']
+                )
+                ic_lookback_days = st.slider("IC/IR 计算回看期 (天):", 30, 365, 180, 10)
 
-                    # 为自适应策略预加载更长周期的价格数据
-                    prices_start_str = bt_start_str
-                    if strategy_model == "自适应权重 (IC-IR)":
-                        prices_start_str = (bt_start_date - timedelta(days=ic_lookback_days + 60)).strftime('%Y%m%d')
+            st.markdown("#### 3. 配置回测参数")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                bt_start_date = st.date_input("回测开始日期", datetime(2023, 1, 1), key="bt_start")
+            with col2:
+                bt_end_date = st.date_input("回测结束日期", datetime.now() - timedelta(days=1), key="bt_end")
+            with col3:
+                rebalance_freq = st.selectbox("调仓频率", ['M', 'W'], index=0, help="M=月度调仓, W=周度调仓")
 
-                    prices_dict = data_manager.run_batch_download(stock_pool, prices_start_str, bt_end_str)
+            st.markdown("#### 4. 配置交易与风控规则")
+            col4, col5, col6 = st.columns(3)
+            with col4:
+                commission = st.number_input("手续费率(%)", 0.0, 1.0, 0.03, 0.01) / 100
+            with col5:
+                max_weight = st.number_input("单票最大权重(%)", 1.0, 100.0, 10.0, 1.0) / 100
+            with col6:
+                stop_loss = st.number_input("止损线(%)", 0.0, 50.0, 15.0, 1.0, help="0表示不止损") / 100
+                stop_loss = stop_loss if stop_loss > 0 else None
 
-                    all_prices_df = pd.DataFrame({
-                        stock: df.set_index('trade_date')['close']
-                        for stock, df in prices_dict.items() if df is not None and not df.empty
-                    }).sort_index()
-                    all_prices_df.index = pd.to_datetime(all_prices_df.index)
-                    all_prices_df.dropna(axis=1, how='all', inplace=True)
-                    stock_pool = all_prices_df.columns.tolist() # 更新为实际有数据的股票池
-                    st.success(f"价格数据准备完成！股票池数量: {len(stock_pool)}")
-
-                    # --- 2. 确定调仓日期 ---
-                    st.info("步骤2: 确定调仓日期...")
-                    # 筛选出回测区间内的价格数据
-                    backtest_prices = all_prices_df.loc[bt_start_date:bt_end_date]
-                    if rebalance_freq == 'M':
-                        rebalance_dates = backtest_prices.resample('M').last().index
-                    else: # 'W'
-                        rebalance_dates = backtest_prices.resample('W').last().index
-                    rebalance_dates = rebalance_dates[(rebalance_dates >= backtest_prices.index.min()) & (rebalance_dates <= backtest_prices.index.max())]
-                    st.success(f"确定了 {len(rebalance_dates)} 个调仓日。")
-
-                    # --- 3. 根据策略选择，初始化并执行权重生成 ---
-                    st.info("步骤3: 在每个调仓日循环计算因子和优化权重...")
-                    all_weights_df = pd.DataFrame(index=backtest_prices.index, columns=stock_pool)
-                    progress_bar = st.progress(0)
-                    optimized_weights = pd.DataFrame() # Initialize to avoid UnboundLocalError
-
-                    # --- A. 固定权重策略 ---
-                    if strategy_model == "固定权重多因子":
-                        for i, date in enumerate(rebalance_dates):
-                            composite_factor = pd.Series(dtype=float)
-                            factor_date_str = date.strftime('%Y%m%d')
-                            factor_start_str = (date - timedelta(days=60)).strftime('%Y%m%d')
-                            for factor_name, weight in factor_weights.items():
-                                if weight == 0: continue
-                                raw_values = {s: factor_factory.calculate(factor_name, ts_code=s, start_date=factor_start_str, end_date=factor_date_str) for s in stock_pool}
-                                raw_series = pd.Series(raw_values).dropna()
-                                if raw_series.empty: continue
-                                processed_factor = factor_processor.process_factor(raw_series, neutralize=True)
-                                if composite_factor.empty:
-                                    composite_factor = processed_factor.mul(weight).reindex(stock_pool).fillna(0)
-                                else:
-                                    composite_factor = composite_factor.add(processed_factor.mul(weight), fill_value=0)
-
-                            if composite_factor.empty or composite_factor.sum() == 0: continue
-                            selected_stocks = composite_factor.nlargest(20).index
-                            cov_matrix = all_prices_df[selected_stocks].loc[:date].pct_change().iloc[-252:].cov() * 252
-                            expected_returns = composite_factor[selected_stocks]
-                            optimizer = quant_engine.PortfolioOptimizer(expected_returns, cov_matrix)
-                            optimized_weights = optimizer.optimize_max_sharpe(max_weight_per_stock=max_weight)
-                            all_weights_df.loc[date] = optimized_weights['weight']
-                            progress_bar.progress((i + 1) / len(rebalance_dates))
-
-                    # --- B. 自适应权重策略 ---
-                    elif strategy_model == "自适应权重 (IC-IR)":
-                        st.info("  正在初始化自适应Alpha策略引擎...")
-                        adaptive_strategy = quant_engine.AdaptiveAlphaStrategy(factor_factory, factor_processor, factor_analyzer, all_prices_df)
-                        st.success("  自适应策略引擎初始化成功！")
-
-                        for i, date in enumerate(rebalance_dates):
-                            composite_factor, dynamic_weights = adaptive_strategy.generate_composite_factor(date, stock_pool, tuple(factors_to_use_adaptive), ic_lookback_days)
-                            if i == 0:
-                                st.write("第一次调仓日计算出的动态因子权重:")
-                                st.dataframe(dynamic_weights)
-
-                            if composite_factor.empty or composite_factor.sum() == 0: continue
-                            selected_stocks = composite_factor.nlargest(20).index
-                            cov_matrix = all_prices_df[selected_stocks].loc[:date].pct_change().iloc[-252:].cov() * 252
-                            expected_returns = composite_factor[selected_stocks]
-                            optimizer = quant_engine.PortfolioOptimizer(expected_returns, cov_matrix)
-                            optimized_weights = optimizer.optimize_max_sharpe(max_weight_per_stock=max_weight)
-                            all_weights_df.loc[date] = optimized_weights['weight']
-                            progress_bar.progress((i + 1) / len(rebalance_dates))
-
-                    # --- C. 机器学习策略 ---
-                    elif strategy_model == "机器学习 (LGBM)":
-                        st.info("  正在初始化并加载机器学习模型...")
-                        ml_strategy = quant_engine.MLAlphaStrategy()
-                        model_loaded = ml_strategy.load_model() # 默认加载 ml_model.pkl
-
-                        if not model_loaded:
-                            st.error("错误：找不到已训练的模型文件 (ml_model.pkl)。请先在“模型训练室”中训练并保存模型。")
-                            st.stop()
-                        st.success("  模型加载成功！")
-
-                        # 获取模型需要的所有因子
-                        model_features = ml_strategy.model.feature_name_
-
-                        for i, date in enumerate(rebalance_dates):
-                            date_str = date.strftime('%Y-%m-%d')
-                            query = text(f"""
-                                SELECT ts_code, factor_name, factor_value
-                                FROM factors_exposure
-                                WHERE trade_date = '{date_str}'
-                                AND factor_name IN ({','.join([f"'{f}'" for f in model_features])})
-                            """)
-                            with data_manager.engine.connect() as conn:
-                                factor_data_today = pd.read_sql(query, conn)
-
-                            if factor_data_today.empty:
-                                continue
-
-                            factor_snapshot = factor_data_today.pivot(
-                                index='ts_code', columns='factor_name', values='factor_value'
-                            ).reindex(columns=model_features).dropna()
-
-                            if factor_snapshot.empty:
-                                continue
-
-                            selected_stocks = ml_strategy.predict_top_stocks(factor_snapshot, top_n=20)
-
-                            if len(selected_stocks) > 0:
-                                weights = 1.0 / len(selected_stocks)
-                                optimized_weights = pd.DataFrame({'weight': weights}, index=selected_stocks)
-                                all_weights_df.loc[date] = optimized_weights['weight']
-
-                            progress_bar.progress((i + 1) / len(rebalance_dates))
-
-                    # --- 4. 填充权重并执行回测 ---
-                    st.info("步骤4: 所有调仓日权重计算完成，开始执行向量化回测...")
-                    all_weights_df.fillna(0, inplace=True)
-                    all_weights_df = all_weights_df.reindex(backtest_prices.index).ffill().fillna(0)
-                    st.success("权重填充完毕！")
-
-                    st.info("步骤5: 执行统一的向量化回测...")
-                    bt = quant_engine.VectorizedBacktester(
-                        all_prices=all_prices_df,
-                        all_factors=None,
-                        rebalance_freq=rebalance_freq,
-                        commission=commission,
-                        slippage=0.0,
-                        stop_loss_pct=stop_loss
-                    )
-
-                    results = bt.run(weights_df=all_weights_df)
-
-                    st.success("回测完成！")
-                    st.markdown("#### 绩效指标 (已考虑交易成本与风控)")
-                    st.table(results['performance'])
-                    if not optimized_weights.empty:
-                        st.markdown("#### 优化后持仓权重 (最后调仓日)")
-                        st.dataframe(optimized_weights.style.format({'weight': '{:.2%}'}))
-                    st.markdown("#### 净值曲线与回撤")
-                    st.plotly_chart(bt.plot_results(), use_container_width=True)
-
-                    st.markdown("#### 投资组合风险暴露分析")
-                    with st.spinner("正在执行风险暴露分析..."):
-                        try:
-                            risk_manager = quant_engine.RiskManager(factor_factory, factor_processor)
-                            valid_rebalance_dates = all_weights_df[all_weights_df.sum(axis=1) > 0].index
-                            all_exposures = []
-                            for date in valid_rebalance_dates:
-                                portfolio_weights = all_weights_df.loc[date].dropna()
-                                portfolio_weights = portfolio_weights[portfolio_weights > 0]
-                                if not portfolio_weights.empty:
-                                    exposure = risk_manager.calculate_risk_exposure(portfolio_weights, date.strftime('%Y%m%d'))
-                                    exposure.name = date
-                                    all_exposures.append(exposure)
-                            
-                            if all_exposures:
-                                exposure_df = pd.concat(all_exposures, axis=1).T
-                                fig = go.Figure()
-                                for factor in exposure_df.columns:
-                                    fig.add_trace(go.Scatter(x=exposure_df.index, y=exposure_df[factor], mode='lines', name=factor))
-                                fig.add_hline(y=0, line_dash="dash", line_color="white")
-                                fig.update_layout(title="策略风险因子暴露度时序图", xaxis_title="日期", yaxis_title="标准化暴露值 (Z-Score)", template="plotly_dark", height=500)
-                                st.plotly_chart(fig, use_container_width=True)
-                                st.caption("暴露值为正，表示您的投资组合在该风险因子上呈正向暴露；值为负则相反。接近0表示在该风险上表现中性。")
-                            else:
-                                st.warning("未能计算任何日期的风险暴露。")
-                        except Exception as e:
-                            st.error(f"风险暴露分析失败: {e}")
-
-                    st.markdown("#### 深度绩效归因 (Brinson Model)")
-                    with st.spinner("正在执行Brinson归因分析..."):
-                        try:
-                            rebalance_dates_attr = bt._get_rebalance_dates()
-                            if len(rebalance_dates_attr) > 1 and not optimized_weights.empty:
-                                attribution_period_start = rebalance_dates_attr[0]
-                                attribution_period_end = rebalance_dates_attr[-1]
-                                stock_basics = get_stock_list()
-                                stock_industry_map = stock_basics[stock_basics['ts_code'].isin(stock_pool)][['ts_code', 'industry']]
-                                portfolio_weights_for_attr = optimized_weights['weight']
-                                benchmark_weights_for_attr = pd.Series(1/len(stock_pool), index=stock_pool)
-                                period_returns = all_prices_df.loc[attribution_period_end] / all_prices_df.loc[attribution_period_start] - 1
-
-                                attribution_analyzer = quant_engine.PerformanceAttribution(
-                                    portfolio_returns=period_returns.reindex(portfolio_weights_for_attr.index).fillna(0),
-                                    portfolio_weights=portfolio_weights_for_attr,
-                                    benchmark_returns=period_returns.reindex(benchmark_weights_for_attr.index).fillna(0),
-                                    benchmark_weights=benchmark_weights_for_attr,
-                                    stock_industry_map=stock_industry_map
-                                )
-                                attribution_results = attribution_analyzer.run_brinson_attribution()
-                                st.dataframe(attribution_results)
-                                st.caption("正向的'资产配置'表示策略超配了表现优于基准的行业。正向的'个股选择'表示在行业内部选出的个股表现优于该行业的整体基准。")
-                            else:
-                                st.warning("数据不足，无法执行业绩归因分析。")
-                        except Exception as e:
-                            st.error(f"业绩归因分析失败: {e}")
-
-                except Exception as e:
-                    st.error(f"向量化回测过程中发生错误: {e}")
-                    st.exception(e)
-
-    elif backtest_type == "事件驱动回测 (精度高，模拟真实交易)":
-        st.markdown("---")
-        st.markdown("模拟真实的逐日交易过程，策略在每个交易日接收数据并做出决策，适合验证均线、突破等时序型策略。")
-
-        st.markdown("#### 1. 配置回测参数")
-        ed_col1, ed_col2, ed_col3 = st.columns(3)
-        with ed_col1:
-            ed_start_date = st.date_input("回测开始日期", datetime(2023, 1, 1), key="ed_start")
-        with ed_col2:
-            ed_end_date = st.date_input("回测结束日期", datetime.now() - timedelta(days=1), key="ed_end")
-        with ed_col3:
-            initial_capital = st.number_input("初始资金", 100000, 100000000, 1000000, 100000)
-
-        st.markdown("#### 2. 配置策略与股票池")
-        strategy_choice = st.selectbox("选择策略", ["双均线交叉策略"])
-
-        ed_col4, ed_col5 = st.columns(2)
-        with ed_col4:
-            short_window = st.slider("短期均线窗口", 5, 50, 10, 1)
-        with ed_col5:
-            long_window = st.slider("长期均线窗口", 20, 120, 30, 1)
-
-        stock_pool_options = get_stock_list()['ts_code'] + " " + get_stock_list()['name']
-        ed_stock_pool = st.multiselect("选择股票池 (建议3-5支)", options=stock_pool_options, default=[s for s in stock_pool_options if "茅台" in s or "平安" in s])
-        ed_stock_codes = [s.split(" ")[0] for s in ed_stock_pool]
-
-        if st.button("🚀 开始事件驱动回测"):
-            if not ed_stock_codes:
-                st.warning("请至少选择一支股票。")
-            else:
-                with st.spinner("正在执行事件驱动回测，请稍候..."):
+            if st.button("🚀 开始优化并回测"):
+                with st.spinner("正在执行向量化回测..."):
                     try:
-                        # 1. 数据准备
-                        st.info("步骤1: 准备股票池的价格与成交量数据...")
-                        ed_start_str = ed_start_date.strftime('%Y%m%d')
-                        ed_end_str = ed_end_date.strftime('%Y%m%d')
-                        prices_dict = data_manager.run_batch_download(ed_stock_codes, ed_start_str, ed_end_str)
+                        # --- 1. 数据准备 ---
+                        st.info("步骤1: 准备股票池和价格数据...")
+                        stock_pool = get_stock_list()['ts_code'].tolist()[:100] # 缩小范围以提高速度
+                        bt_start_str = bt_start_date.strftime('%Y%m%d')
+                        bt_end_str = bt_end_date.strftime('%Y%m%d')
+
+                        # 为自适应策略预加载更长周期的价格数据
+                        prices_start_str = bt_start_str
+                        if strategy_model == "自适应权重 (IC-IR)":
+                            prices_start_str = (bt_start_date - timedelta(days=ic_lookback_days + 60)).strftime('%Y%m%d')
+
+                        prices_dict = data_manager.run_batch_download(stock_pool, prices_start_str, bt_end_str)
 
                         all_prices_df = pd.DataFrame({
                             stock: df.set_index('trade_date')['close']
-                            for stock, df in prices_dict.items() if df is not None and not df.empty and 'close' in df.columns
+                            for stock, df in prices_dict.items() if df is not None and not df.empty
                         }).sort_index()
-
-                        all_volumes_df = pd.DataFrame({
-                            stock: df.set_index('trade_date')['vol']
-                            for stock, df in prices_dict.items() if df is not None and not df.empty and 'vol' in df.columns
-                        }).sort_index()
-
-                        common_index = all_prices_df.index.intersection(all_volumes_df.index)
-                        common_columns = all_prices_df.columns.intersection(all_volumes_df.columns)
-                        all_prices_df = all_prices_df.loc[common_index, common_columns]
-                        all_volumes_df = all_volumes_df.loc[common_index, common_columns]
+                        all_prices_df.index = pd.to_datetime(all_prices_df.index)
                         all_prices_df.dropna(axis=1, how='all', inplace=True)
-                        all_volumes_df = all_volumes_df.reindex(columns=all_prices_df.columns)
+                        stock_pool = all_prices_df.columns.tolist() # 更新为实际有数据的股票池
+                        st.success(f"价格数据准备完成！股票池数量: {len(stock_pool)}")
 
-                        st.success(f"价格与成交量数据准备完成！股票池: {all_prices_df.columns.tolist()}")
+                        # --- 2. 确定调仓日期 ---
+                        st.info("步骤2: 确定调仓日期...")
+                        # 筛选出回测区间内的价格数据
+                        backtest_prices = all_prices_df.loc[bt_start_date:bt_end_date]
+                        if rebalance_freq == 'M':
+                            rebalance_dates = backtest_prices.resample('M').last().index
+                        else: # 'W'
+                            rebalance_dates = backtest_prices.resample('W').last().index
+                        rebalance_dates = rebalance_dates[(rebalance_dates >= backtest_prices.index.min()) & (rebalance_dates <= backtest_prices.index.max())]
+                        st.success(f"确定了 {len(rebalance_dates)} 个调仓日。")
 
-                        # 2. 初始化事件驱动引擎
-                        st.info("步骤2: 初始化事件驱动引擎组件...")
-                        from queue import Queue
-                        events_queue = Queue()
+                        # --- 3. 根据策略选择，初始化并执行权重生成 ---
+                        st.info("步骤3: 在每个调仓日循环计算因子和优化权重...")
+                        all_weights_df = pd.DataFrame(index=backtest_prices.index, columns=stock_pool)
+                        progress_bar = st.progress(0)
+                        optimized_weights = pd.DataFrame() # Initialize to avoid UnboundLocalError
 
-                        data_handler = quant_engine.SimpleDataHandler(events_queue, all_prices_df, all_volumes_df)
-                        portfolio = quant_engine.SimplePortfolio(data_handler, events_queue, initial_capital)
-                        strategy = quant_engine.SimpleMovingAverageStrategy(data_handler, short_window, long_window)
-                        execution_handler = quant_engine.MockExecutionHandler(events_queue, data_handler, portfolio)
+                        # --- A. 固定权重策略 ---
+                        if strategy_model == "固定权重多因子":
+                            for i, date in enumerate(rebalance_dates):
+                                composite_factor = pd.Series(dtype=float)
+                                factor_date_str = date.strftime('%Y%m%d')
+                                factor_start_str = (date - timedelta(days=60)).strftime('%Y%m%d')
+                                for factor_name, weight in factor_weights.items():
+                                    if weight == 0: continue
+                                    raw_values = {s: factor_factory.calculate(factor_name, ts_code=s, start_date=factor_start_str, end_date=factor_date_str) for s in stock_pool}
+                                    raw_series = pd.Series(raw_values).dropna()
+                                    if raw_series.empty: continue
+                                    processed_factor = factor_processor.process_factor(raw_series, neutralize=True)
+                                    if composite_factor.empty:
+                                        composite_factor = processed_factor.mul(weight).reindex(stock_pool).fillna(0)
+                                    else:
+                                        composite_factor = composite_factor.add(processed_factor.mul(weight), fill_value=0)
 
-                        backtester = quant_engine.EventDrivenBacktester(
-                            data_handler, strategy, portfolio, execution_handler
+                                if composite_factor.empty or composite_factor.sum() == 0: continue
+                                selected_stocks = composite_factor.nlargest(20).index
+                                cov_matrix = all_prices_df[selected_stocks].loc[:date].pct_change().iloc[-252:].cov() * 252
+                                expected_returns = composite_factor[selected_stocks]
+                                optimizer = quant_engine.PortfolioOptimizer(expected_returns, cov_matrix)
+                                optimized_weights = optimizer.optimize_max_sharpe(max_weight_per_stock=max_weight)
+                                all_weights_df.loc[date] = optimized_weights['weight']
+                                progress_bar.progress((i + 1) / len(rebalance_dates))
+
+                        # --- B. 自适应权重策略 ---
+                        elif strategy_model == "自适应权重 (IC-IR)":
+                            st.info("  正在初始化自适应Alpha策略引擎...")
+                            adaptive_strategy = quant_engine.AdaptiveAlphaStrategy(factor_factory, factor_processor, factor_analyzer, all_prices_df)
+                            st.success("  自适应策略引擎初始化成功！")
+
+                            for i, date in enumerate(rebalance_dates):
+                                composite_factor, dynamic_weights = adaptive_strategy.generate_composite_factor(date, stock_pool, tuple(factors_to_use_adaptive), ic_lookback_days)
+                                if i == 0:
+                                    st.write("第一次调仓日计算出的动态因子权重:")
+                                    st.dataframe(dynamic_weights)
+
+                                if composite_factor.empty or composite_factor.sum() == 0: continue
+                                selected_stocks = composite_factor.nlargest(20).index
+                                cov_matrix = all_prices_df[selected_stocks].loc[:date].pct_change().iloc[-252:].cov() * 252
+                                expected_returns = composite_factor[selected_stocks]
+                                optimizer = quant_engine.PortfolioOptimizer(expected_returns, cov_matrix)
+                                optimized_weights = optimizer.optimize_max_sharpe(max_weight_per_stock=max_weight)
+                                all_weights_df.loc[date] = optimized_weights['weight']
+                                progress_bar.progress((i + 1) / len(rebalance_dates))
+
+                        # --- C. 机器学习策略 ---
+                        elif strategy_model == "机器学习 (LGBM)":
+                            st.info("  正在初始化并加载机器学习模型...")
+                            ml_strategy = quant_engine.MLAlphaStrategy()
+                            model_loaded = ml_strategy.load_model() # 默认加载 ml_model.pkl
+
+                            if not model_loaded:
+                                st.error("错误：找不到已训练的模型文件 (ml_model.pkl)。请先在“模型训练室”中训练并保存模型。")
+                                st.stop()
+                            st.success("  模型加载成功！")
+
+                            # 获取模型需要的所有因子
+                            model_features = ml_strategy.model.feature_name_
+
+                            for i, date in enumerate(rebalance_dates):
+                                date_str = date.strftime('%Y-%m-%d')
+                                query = text(f"""
+                                    SELECT ts_code, factor_name, factor_value
+                                    FROM factors_exposure
+                                    WHERE trade_date = '{date_str}'
+                                    AND factor_name IN ({','.join([f"'{f}'" for f in model_features])})
+                                """)
+                                with data_manager.engine.connect() as conn:
+                                    factor_data_today = pd.read_sql(query, conn)
+
+                                if factor_data_today.empty:
+                                    continue
+
+                                factor_snapshot = factor_data_today.pivot(
+                                    index='ts_code', columns='factor_name', values='factor_value'
+                                ).reindex(columns=model_features).dropna()
+
+                                if factor_snapshot.empty:
+                                    continue
+
+                                selected_stocks = ml_strategy.predict_top_stocks(factor_snapshot, top_n=20)
+
+                                if len(selected_stocks) > 0:
+                                    weights = 1.0 / len(selected_stocks)
+                                    optimized_weights = pd.DataFrame({'weight': weights}, index=selected_stocks)
+                                    all_weights_df.loc[date] = optimized_weights['weight']
+
+                                progress_bar.progress((i + 1) / len(rebalance_dates))
+
+                        # --- 4. 填充权重并执行回测 ---
+                        st.info("步骤4: 所有调仓日权重计算完成，开始执行向量化回测...")
+                        all_weights_df.fillna(0, inplace=True)
+                        all_weights_df = all_weights_df.reindex(backtest_prices.index).ffill().fillna(0)
+                        st.success("权重填充完毕！")
+
+                        st.info("步骤5: 执行统一的向量化回测...")
+                        bt = quant_engine.VectorizedBacktester(
+                            all_prices=all_prices_df,
+                            all_factors=None,
+                            rebalance_freq=rebalance_freq,
+                            commission=commission,
+                            slippage=0.0,
+                            stop_loss_pct=stop_loss
                         )
-                        st.success("引擎初始化完毕！")
 
-                        # 3. 运行回测
-                        st.info("步骤3: 开始运行事件循环...")
-                        ed_results = backtester.run_backtest()
-                        st.success("事件驱动回测完成！")
+                        results = bt.run(weights_df=all_weights_df)
 
-                        # 4. 展示结果
-                        st.markdown("#### 绩效指标")
-                        st.table(ed_results['performance'])
+                        st.success("回测完成！")
+                        st.markdown("#### 绩效指标 (已考虑交易成本与风控)")
+                        st.table(results['performance'])
+                        if not optimized_weights.empty:
+                            st.markdown("#### 优化后持仓权重 (最后调仓日)")
+                            st.dataframe(optimized_weights.style.format({'weight': '{:.2%}'}))
+                        st.markdown("#### 净值曲线与回撤")
+                        st.plotly_chart(bt.plot_results(), use_container_width=True)
 
-                        st.markdown("#### 净值曲线")
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=ed_results['equity_curve'].index, y=ed_results['equity_curve']['total'], mode='lines', name='策略净值'))
-                        fig.update_layout(title="事件驱动回测 - 资产净值变化", template="plotly_dark", height=500)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.markdown("#### 投资组合风险暴露分析")
+                        with st.spinner("正在执行风险暴露分析..."):
+                            try:
+                                risk_manager = quant_engine.RiskManager(factor_factory, factor_processor)
+                                valid_rebalance_dates = all_weights_df[all_weights_df.sum(axis=1) > 0].index
+                                all_exposures = []
+                                for date in valid_rebalance_dates:
+                                    portfolio_weights = all_weights_df.loc[date].dropna()
+                                    portfolio_weights = portfolio_weights[portfolio_weights > 0]
+                                    if not portfolio_weights.empty:
+                                        exposure = risk_manager.calculate_risk_exposure(portfolio_weights, date.strftime('%Y%m%d'))
+                                        exposure.name = date
+                                        all_exposures.append(exposure)
+                                
+                                if all_exposures:
+                                    exposure_df = pd.concat(all_exposures, axis=1).T
+                                    fig = go.Figure()
+                                    for factor in exposure_df.columns:
+                                        fig.add_trace(go.Scatter(x=exposure_df.index, y=exposure_df[factor], mode='lines', name=factor))
+                                    fig.add_hline(y=0, line_dash="dash", line_color="white")
+                                    fig.update_layout(title="策略风险因子暴露度时序图", xaxis_title="日期", yaxis_title="标准化暴露值 (Z-Score)", template="plotly_dark", height=500)
+                                    st.plotly_chart(fig, use_container_width=True)
+                                    st.caption("暴露值为正，表示您的投资组合在该风险因子上呈正向暴露；值为负则相反。接近0表示在该风险上表现中性。")
+                                else:
+                                    st.warning("未能计算任何日期的风险暴露。")
+                            except Exception as e:
+                                st.error(f"风险暴露分析失败: {e}")
 
-                        st.markdown("#### 详细交易记录")
-                        st.dataframe(ed_results['trade_log'], use_container_width=True)
+                        st.markdown("#### 深度绩效归因 (Brinson Model)")
+                        with st.spinner("正在执行Brinson归因分析..."):
+                            try:
+                                rebalance_dates_attr = bt._get_rebalance_dates()
+                                if len(rebalance_dates_attr) > 1 and not optimized_weights.empty:
+                                    attribution_period_start = rebalance_dates_attr[0]
+                                    attribution_period_end = rebalance_dates_attr[-1]
+                                    stock_basics = get_stock_list()
+                                    stock_industry_map = stock_basics[stock_basics['ts_code'].isin(stock_pool)][['ts_code', 'industry']]
+                                    portfolio_weights_for_attr = optimized_weights['weight']
+                                    benchmark_weights_for_attr = pd.Series(1/len(stock_pool), index=stock_pool)
+                                    period_returns = all_prices_df.loc[attribution_period_end] / all_prices_df.loc[attribution_period_start] - 1
+
+                                    attribution_analyzer = quant_engine.PerformanceAttribution(
+                                        portfolio_returns=period_returns.reindex(portfolio_weights_for_attr.index).fillna(0),
+                                        portfolio_weights=portfolio_weights_for_attr,
+                                        benchmark_returns=period_returns.reindex(benchmark_weights_for_attr.index).fillna(0),
+                                        benchmark_weights=benchmark_weights_for_attr,
+                                        stock_industry_map=stock_industry_map
+                                    )
+                                    attribution_results = attribution_analyzer.run_brinson_attribution()
+                                    st.dataframe(attribution_results)
+                                    st.caption("正向的'资产配置'表示策略超配了表现优于基准的行业。正向的'个股选择'表示在行业内部选出的个股表现优于该行业的整体基准。")
+                                else:
+                                    st.warning("数据不足，无法执行业绩归因分析。")
+                            except Exception as e:
+                                st.error(f"业绩归因分析失败: {e}")
 
                     except Exception as e:
-                        st.error(f"事件驱动回测过程中发生错误: {e}")
+                        st.error(f"向量化回测过程中发生错误: {e}")
                         st.exception(e)
+
+        elif backtest_type == "事件驱动回测 (精度高，模拟真实交易)":
+            st.markdown("---")
+            st.markdown("模拟真实的逐日交易过程，策略在每个交易日接收数据并做出决策，适合验证均线、突破等时序型策略。")
+
+            st.markdown("#### 1. 配置回测参数")
+            ed_col1, ed_col2, ed_col3 = st.columns(3)
+            with ed_col1:
+                ed_start_date = st.date_input("回测开始日期", datetime(2023, 1, 1), key="ed_start")
+            with ed_col2:
+                ed_end_date = st.date_input("回测结束日期", datetime.now() - timedelta(days=1), key="ed_end")
+            with ed_col3:
+                initial_capital = st.number_input("初始资金", 100000, 100000000, 1000000, 100000)
+
+            st.markdown("#### 2. 配置策略与股票池")
+            strategy_choice = st.selectbox("选择策略", ["双均线交叉策略"])
+
+            ed_col4, ed_col5 = st.columns(2)
+            with ed_col4:
+                short_window = st.slider("短期均线窗口", 5, 50, 10, 1)
+            with ed_col5:
+                long_window = st.slider("长期均线窗口", 20, 120, 30, 1)
+
+            stock_pool_options = get_stock_list()['ts_code'] + " " + get_stock_list()['name']
+            ed_stock_pool = st.multiselect("选择股票池 (建议3-5支)", options=stock_pool_options, default=[s for s in stock_pool_options if "茅台" in s or "平安" in s])
+            ed_stock_codes = [s.split(" ")[0] for s in ed_stock_pool]
+
+            if st.button("🚀 开始事件驱动回测"):
+                if not ed_stock_codes:
+                    st.warning("请至少选择一支股票。")
+                else:
+                    with st.spinner("正在执行事件驱动回测，请稍候..."):
+                        try:
+                            # 1. 数据准备
+                            st.info("步骤1: 准备股票池的价格与成交量数据...")
+                            ed_start_str = ed_start_date.strftime('%Y%m%d')
+                            ed_end_str = ed_end_date.strftime('%Y%m%d')
+                            prices_dict = data_manager.run_batch_download(ed_stock_codes, ed_start_str, ed_end_str)
+
+                            all_prices_df = pd.DataFrame({
+                                stock: df.set_index('trade_date')['close']
+                                for stock, df in prices_dict.items() if df is not None and not df.empty and 'close' in df.columns
+                            }).sort_index()
+
+                            all_volumes_df = pd.DataFrame({
+                                stock: df.set_index('trade_date')['vol']
+                                for stock, df in prices_dict.items() if df is not None and not df.empty and 'vol' in df.columns
+                            }).sort_index()
+
+                            common_index = all_prices_df.index.intersection(all_volumes_df.index)
+                            common_columns = all_prices_df.columns.intersection(all_volumes_df.columns)
+                            all_prices_df = all_prices_df.loc[common_index, common_columns]
+                            all_volumes_df = all_volumes_df.loc[common_index, common_columns]
+                            all_prices_df.dropna(axis=1, how='all', inplace=True)
+                            all_volumes_df = all_volumes_df.reindex(columns=all_prices_df.columns)
+
+                            st.success(f"价格与成交量数据准备完成！股票池: {all_prices_df.columns.tolist()}")
+
+                            # 2. 初始化事件驱动引擎
+                            st.info("步骤2: 初始化事件驱动引擎组件...")
+                            from queue import Queue
+                            events_queue = Queue()
+
+                            data_handler = quant_engine.SimpleDataHandler(events_queue, all_prices_df, all_volumes_df)
+                            portfolio = quant_engine.SimplePortfolio(data_handler, events_queue, initial_capital)
+                            strategy = quant_engine.SimpleMovingAverageStrategy(data_handler, short_window, long_window)
+                            execution_handler = quant_engine.MockExecutionHandler(events_queue, data_handler, portfolio)
+
+                            backtester = quant_engine.EventDrivenBacktester(
+                                data_handler, strategy, portfolio, execution_handler
+                            )
+                            st.success("引擎初始化完毕！")
+
+                            # 3. 运行回测
+                            st.info("步骤3: 开始运行事件循环...")
+                            ed_results = backtester.run_backtest()
+                            st.success("事件驱动回测完成！")
+
+                            # 4. 展示结果
+                            st.markdown("#### 绩效指标")
+                            st.table(ed_results['performance'])
+
+                            st.markdown("#### 净值曲线")
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(x=ed_results['equity_curve'].index, y=ed_results['equity_curve']['total'], mode='lines', name='策略净值'))
+                            fig.update_layout(title="事件驱动回测 - 资产净值变化", template="plotly_dark", height=500)
+                            st.plotly_chart(fig, use_container_width=True)
+
+                            st.markdown("#### 详细交易记录")
+                            st.dataframe(ed_results['trade_log'], use_container_width=True)
+
+                        except Exception as e:
+                            st.error(f"事件驱动回测过程中发生错误: {e}")
+                            st.exception(e)
 
 # --- V2.3 新增: 9. 模型训练室 ---
 if tab_trainer:
