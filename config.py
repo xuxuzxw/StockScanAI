@@ -41,8 +41,8 @@ AI_MODEL_CONFIG = {
     'medium_balanced': {
         'api_key': os.getenv("AI_API_KEY_MEDIUM"),
         'endpoint': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-        'model_name': 'qwen-plus',
-        'cost_per_1k_tokens': 0.003,
+        'model_name': 'qwen-plus-latest',
+        'cost_per_1k_tokens': 0.002,
         'params': {
             'max_tokens': 8192,
             'temperature': 0.7,
@@ -52,7 +52,7 @@ AI_MODEL_CONFIG = {
         'api_key': os.getenv("AI_API_KEY_POWERFUL"),
         'endpoint': 'https://api.deepseek.com/v1/chat/completions',
         'model_name': 'deepseek-reasoner',
-        'cost_per_1k_tokens': 0.01,
+        'cost_per_1k_tokens': 0.016,
         'params': {
             'max_tokens': 8192,
             'temperature': 0.75,

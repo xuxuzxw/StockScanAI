@@ -61,6 +61,39 @@ class DataManager:
         # 留出一些安全边际，所以用400而不是800
         self.request_delay = 60.0 / requests_per_minute
 
+    def _upsert_data(self, table_name: str, df: pd.DataFrame, primary_keys: list[str]):
+        """
+        【V2.1重构】通用的数据插入或更新（UPSERT）方法。
+        利用 PostgreSQL 的 ON CONFLICT 特性高效写入数据。
+        """
+        if df is None or df.empty:
+            return
+
+        from sqlalchemy.dialects.postgresql import insert
+
+        with self.engine.connect() as connection:
+            with connection.begin():
+                for index, row in df.iterrows():
+                    # 将Pandas的row转换为字典
+                    row_dict = row.to_dict()
+                    # 构造 insert 语句
+                    stmt = insert(sqlalchemy.table(table_name, *[sqlalchemy.column(c) for c in df.columns])) \
+                        .values(**row_dict)
+                    
+                    # 定义 ON CONFLICT DO UPDATE 的逻辑
+                    # 更新除主键外的所有列
+                    update_cols = {col.name: col for col in stmt.excluded if col.name not in primary_keys}
+                    if update_cols:
+                        stmt = stmt.on_conflict_do_update(
+                            index_elements=primary_keys,
+                            set_=update_cols
+                        )
+                    else: # 如果没有其他列可以更新，则只执行 DO NOTHING
+                         stmt = stmt.on_conflict_do_nothing(index_elements=primary_keys)
+
+                    # 执行语句
+                    connection.execute(stmt)
+
     def _initialize_db(self):
         """【V2.0核心改造】初始化TimescaleDB，创建Hypertable"""
         with self.engine.begin() as connection:
@@ -141,6 +174,153 @@ class DataManager:
                 """))
                 # 这张表也可以从Hypertable中受益，便于按时间管理
                 connection.execute(sqlalchemy.text("SELECT create_hypertable('ai_reports', 'trade_date', if_not_exists => TRUE);"))
+
+                # --- V2.1 新增表 ---
+                # 【V2.1新增】股东人数表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS stk_holdernumber (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE,
+                        end_date DATE NOT NULL,
+                        holder_num BIGINT,
+                        PRIMARY KEY (ts_code, end_date)
+                    );
+                """))
+                # 【V2.1新增】重要股东增减持表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS stk_holdertrade (
+                        ann_date DATE NOT NULL,
+                        ts_code TEXT NOT NULL,
+                        holder_name TEXT,
+                        holder_type TEXT,
+                        in_de TEXT,
+                        change_vol NUMERIC,
+                        change_ratio NUMERIC,
+                        after_share NUMERIC,
+                        after_ratio NUMERIC,
+                        avg_price NUMERIC,
+                        total_share NUMERIC,
+                        -- 复合主键，防止同一天同一股东的多笔交易记录重复
+                        PRIMARY KEY (ann_date, ts_code, holder_name, change_vol)
+                    );
+                """))
+                connection.execute(sqlalchemy.text("SELECT create_hypertable('stk_holdertrade', 'ann_date', if_not_exists => TRUE);"))
+                # 【V2.1新增】龙虎榜每日详情表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS top_list (
+                        trade_date DATE NOT NULL,
+                        ts_code TEXT NOT NULL,
+                        name TEXT,
+                        close NUMERIC,
+                        pct_change NUMERIC,
+                        turnover_rate NUMERIC,
+                        amount NUMERIC,
+                        l_sell NUMERIC,
+                        l_buy NUMERIC,
+                        l_amount NUMERIC,
+                        net_amount NUMERIC,
+                        net_rate NUMERIC,
+                        amount_rate NUMERIC,
+                        float_values NUMERIC,
+                        reason TEXT,
+                        PRIMARY KEY (trade_date, ts_code, reason)
+                    );
+                """))
+                connection.execute(sqlalchemy.text("SELECT create_hypertable('top_list', 'trade_date', if_not_exists => TRUE);"))
+
+                # 【V2.1新增】业绩快报表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS express (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE,
+                        end_date DATE NOT NULL,
+                        revenue NUMERIC,
+                        operate_profit NUMERIC,
+                        total_profit NUMERIC,
+                        n_income NUMERIC,
+                        total_assets NUMERIC,
+                        total_hldr_eqy_exc_min_int NUMERIC,
+                        diluted_eps NUMERIC,
+                        diluted_roe NUMERIC,
+                        yoy_op NUMERIC,
+                        yoy_gr NUMERIC,
+                        yoy_net_profit NUMERIC,
+                        bps NUMERIC,
+                        perf_summary TEXT,
+                        update_flag TEXT,
+                        PRIMARY KEY (ts_code, end_date)
+                    );
+                """))
+                # 【V2.1新增】分红送股表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS financial_dividend (
+                        ts_code TEXT NOT NULL,
+                        end_date DATE NOT NULL,
+                        ann_date DATE,
+                        div_proc TEXT,
+                        stk_div NUMERIC,
+                        stk_bo_rate NUMERIC,
+                        stk_co_rate NUMERIC,
+                        cash_div NUMERIC,
+                        cash_div_tax NUMERIC,
+                        record_date DATE,
+                        ex_date DATE,
+                        pay_date DATE,
+                        div_listdate DATE,
+                        imp_ann_date DATE,
+                        PRIMARY KEY (ts_code, end_date)
+                    );
+                """))
+                # 【V2.1新增】股票回购表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS financial_repurchase (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE NOT NULL,
+                        end_date DATE,
+                        proc TEXT,
+                        exp_date DATE,
+                        vol NUMERIC,
+                        amount NUMERIC,
+                        high_limit NUMERIC,
+                        low_limit NUMERIC,
+                        PRIMARY KEY (ts_code, ann_date)
+                    );
+                """))
+                connection.execute(sqlalchemy.text("SELECT create_hypertable('financial_repurchase', 'ann_date', if_not_exists => TRUE);"))
+
+                # 【V2.1新增】大宗交易表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS block_trade (
+                        trade_date DATE NOT NULL,
+                        ts_code TEXT NOT NULL,
+                        price NUMERIC,
+                        vol NUMERIC,
+                        amount NUMERIC,
+                        buyer TEXT,
+                        seller TEXT,
+                        PRIMARY KEY (trade_date, ts_code, amount, buyer, seller)
+                    );
+                """))
+                connection.execute(sqlalchemy.text("SELECT create_hypertable('block_trade', 'trade_date', if_not_exists => TRUE);"))
+
+                # 【V2.1新增】业绩快报表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS express (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE,
+                        end_date DATE NOT NULL,
+                        revenue NUMERIC,
+                        operate_profit NUMERIC,
+                        total_profit NUMERIC,
+                        n_income NUMERIC,
+                        total_assets NUMERIC,
+                        yoy_op NUMERIC,
+                        yoy_gr NUMERIC,
+                        yoy_net_profit NUMERIC,
+                        PRIMARY KEY (ts_code, end_date)
+                    );
+                """))
+
 
             except ProgrammingError as e:
                 print(f"数据库初始化时发生已知错误（可能已初始化），可忽略: {e}")
@@ -375,6 +555,223 @@ class DataManager:
     def get_top10_floatholders(self, ts_code, period):
         return self.pro.top10_floatholders(ts_code=ts_code, period=period)
 
+    @api_rate_limit(calls_per_minute=100)
+    def get_holder_number(self, ts_code: str, force_update=False):
+        """【V2.1重构-效率】获取股东人数，使用UPSERT逻辑高效缓存。"""
+        table_name = 'stk_holdernumber'
+        primary_keys = ['ts_code', 'end_date']
+        
+        # 即使非强制更新，也从API获取一次，以抓取最新的数据
+        # 因为API不支持增量查询，但我们的UPSERT逻辑可以处理增量写入
+        df_api = self.pro.stk_holdernumber(ts_code=ts_code)
+        if df_api is not None and not df_api.empty:
+            self._upsert_data(table_name, df_api, primary_keys)
+
+        # 无论如何，最后都从数据库返回最完整的数据
+        try:
+            query = sqlalchemy.text(f"SELECT * FROM {table_name} WHERE ts_code = :ts_code")
+            with self.engine.connect() as connection:
+                df_db = pd.read_sql(query, connection, params={'ts_code': ts_code})
+            return df_db.sort_values(by='end_date').reset_index(drop=True)
+        except Exception as e:
+            print(f"从 {table_name} 读取 {ts_code} 数据失败: {e}。")
+            return pd.DataFrame()
+
+    @api_rate_limit()
+    def get_holder_trade(self, ts_code: str, start_date: str, end_date: str):
+        """【V2.1新增】获取重要股东增减持数据，带缓存。"""
+        # 此接口数据量较小，可以简化缓存逻辑：优先从API获取，然后补充写入。
+        table_name = 'stk_holdertrade'
+        df_api = self.pro.stk_holdertrade(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if df_api is not None and not df_api.empty:
+            try:
+                with self.engine.connect() as connection:
+                    with connection.begin():
+                        # to_sql 配合复合主键，重复数据将因违反主键约束而无法插入
+                        df_api.to_sql(table_name, connection, if_exists='append', index=False)
+            except sqlalchemy.exc.IntegrityError:
+                # 这是一个预期的行为，当尝试插入重复数据时发生，可以安全地忽略
+                pass
+            except Exception as e:
+                print(f"写入 {table_name} for {ts_code} 失败: {e}")
+        return df_api
+
+    @api_rate_limit()
+    def get_top_list(self, trade_date: str = None, start_date: str = None, end_date: str = None, force_update=False):
+        """【V2.1修正】获取龙虎榜数据，支持单日或多日查询，带缓存。"""
+        table_name = 'top_list'
+
+        if trade_date:
+            start_date = end_date = trade_date
+
+        if start_date and end_date:
+            if not force_update:
+                try:
+                    query = sqlalchemy.text("SELECT * FROM top_list WHERE trade_date BETWEEN :start AND :end")
+                    with self.engine.connect() as connection:
+                        df_db = pd.read_sql(query, connection, params={'start': start_date, 'end': end_date})
+                    if not df_db.empty:
+                        return df_db
+                except Exception as e:
+                    print(f"从 {table_name} 读取 {start_date}-{end_date} 数据失败: {e}。将从API获取。")
+            
+            # 按日循环获取
+            all_dfs = []
+            trade_dates = self.pro.trade_cal(start_date=start_date, end_date=end_date)
+            open_dates = trade_dates[trade_dates['is_open'] == 1]['cal_date'].tolist()
+
+            for date in open_dates:
+                df_api = self.pro.top_list(trade_date=date)
+                if df_api is not None and not df_api.empty:
+                    all_dfs.append(df_api)
+            
+            if not all_dfs:
+                return pd.DataFrame()
+
+            final_df = pd.concat(all_dfs)
+            # 写入数据库
+            with self.engine.connect() as connection:
+                with connection.begin():
+                    # 这里简化为追加，依赖主键防止重复。更稳妥的方式是先删后写。
+                    final_df.to_sql(table_name, connection, if_exists='append', index=False)
+            return final_df
+        
+        # 原有的单日逻辑
+        if not force_update:
+            try:
+                query = sqlalchemy.text("SELECT * FROM top_list WHERE trade_date = :trade_date")
+                with self.engine.connect() as connection:
+                    df_db = pd.read_sql(query, connection, params={'trade_date': trade_date})
+                if not df_db.empty:
+                    return df_db
+            except Exception as e:
+                print(f"从 {table_name} 读取 {trade_date} 数据失败: {e}。将从API获取。")
+
+        df_api = self.pro.top_list(trade_date=trade_date)
+        if df_api is not None and not df_api.empty:
+            with self.engine.connect() as connection:
+                with connection.begin():
+                    delete_sql = sqlalchemy.text("DELETE FROM top_list WHERE trade_date = :trade_date")
+                    connection.execute(delete_sql, {'trade_date': trade_date})
+                    df_api.to_sql(table_name, connection, if_exists='append', index=False)
+        return df_api
+
+    @api_rate_limit()
+    def get_forecast(self, ts_code: str, start_date: str, end_date: str):
+        """【V2.1新增】获取业绩预告数据，带缓存。"""
+        table_name = 'financial_forecast'
+        # 此接口数据量较小，可以简化缓存逻辑：优先从API获取，然后补充写入。
+        df_api = self.pro.forecast(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if df_api is not None and not df_api.empty:
+            try:
+                with self.engine.connect() as connection:
+                    with connection.begin():
+                        # to_sql 配合复合主键，重复数据将因违反主键约束而无法插入
+                        df_api.to_sql(table_name, connection, if_exists='append', index=False)
+            except sqlalchemy.exc.IntegrityError:
+                # 这是一个预期的行为，当尝试插入重复数据时发生，可以安全地忽略
+                pass
+            except Exception as e:
+                print(f"写入 {table_name} for {ts_code} 失败: {e}")
+        return df_api
+
+    @api_rate_limit()
+    def get_dividend(self, ts_code: str, force_update=False):
+        """【V2.1重构-效率】获取分红送股数据，使用UPSERT逻辑高效缓存。"""
+        table_name = 'financial_dividend'
+        primary_keys = ['ts_code', 'end_date']
+        
+        df_api = self.pro.dividend(ts_code=ts_code)
+        if df_api is not None and not df_api.empty:
+             self._upsert_data(table_name, df_api, primary_keys)
+
+        # 无论如何，最后都从数据库返回最完整的数据
+        try:
+            query = sqlalchemy.text(f"SELECT * FROM {table_name} WHERE ts_code = :ts_code")
+            with self.engine.connect() as connection:
+                df_db = pd.read_sql(query, connection, params={'ts_code': ts_code})
+            return df_db.sort_values(by='end_date').reset_index(drop=True)
+        except Exception as e:
+            print(f"从 {table_name} 读取 {ts_code} 数据失败: {e}。")
+            return pd.DataFrame()
+
+    @api_rate_limit()
+    def get_repurchase(self, ts_code: str, start_date: str, end_date: str):
+        """【V2.1新增】获取股票回购数据，带缓存。"""
+        table_name = 'financial_repurchase'
+        df_api = self.pro.repurchase(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if df_api is not None and not df_api.empty:
+            try:
+                with self.engine.connect() as connection:
+                    with connection.begin():
+                        # to_sql 配合复合主键，重复数据将因违反主键约束而无法插入
+                        df_api.to_sql(table_name, connection, if_exists='append', index=False)
+            except sqlalchemy.exc.IntegrityError:
+                # 这是一个预期的行为，当尝试插入重复数据时发生，可以安全地忽略
+                pass
+            except Exception as e:
+                print(f"写入 {table_name} for {ts_code} 失败: {e}")
+        return df_api
+
+    @api_rate_limit()
+    def get_express(self, ts_code: str, start_date: str, end_date: str):
+        """【V2.1新增】获取业绩快报数据，带缓存。"""
+        table_name = 'express'
+        df_api = self.pro.express(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if df_api is not None and not df_api.empty:
+            self._upsert_data(table_name, df_api, ['ts_code', 'end_date'])
+        
+        # 从数据库读取返回，确保数据完整性
+        try:
+            query = sqlalchemy.text(f"SELECT * FROM {table_name} WHERE ts_code = :ts_code AND end_date BETWEEN :start AND :end")
+            with self.engine.connect() as connection:
+                df_db = pd.read_sql(query, connection, params={'ts_code': ts_code, 'start': start_date, 'end': end_date})
+            return df_db
+        except Exception as e:
+            print(f"从 {table_name} 读取 {ts_code} 数据失败: {e}。")
+            return df_api # 如果读取失败，返回刚从API获取的数据
+
+    @api_rate_limit()
+    def get_block_trade(self, trade_date: str = None, start_date: str = None, end_date: str = None):
+        """【V2.1修正】获取大宗交易数据，支持单日或多日查询，使用UPSERT缓存。"""
+        table_name = 'block_trade'
+        
+        if trade_date:
+            start_date = end_date = trade_date
+
+        if start_date and end_date:
+            # 按日循环获取
+            all_dfs = []
+            trade_dates = self.pro.trade_cal(start_date=start_date, end_date=end_date)
+            open_dates = trade_dates[trade_dates['is_open'] == 1]['cal_date'].tolist()
+
+            for date in open_dates:
+                df_api_daily = self.pro.block_trade(trade_date=date)
+                if df_api_daily is not None and not df_api_daily.empty:
+                    all_dfs.append(df_api_daily)
+            
+            if not all_dfs:
+                return pd.DataFrame()
+
+            final_df = pd.concat(all_dfs)
+            self._upsert_data(table_name, final_df, ['trade_date', 'ts_code', 'amount', 'buyer', 'seller'])
+            return final_df
+
+        return pd.DataFrame()
+        if df_api is not None and not df_api.empty:
+            self._upsert_data(table_name, df_api, ['trade_date', 'ts_code', 'amount', 'buyer', 'seller'])
+        
+        # 从数据库读取返回
+        try:
+            query = sqlalchemy.text(f"SELECT * FROM {table_name} WHERE trade_date = :trade_date")
+            with self.engine.connect() as connection:
+                df_db = pd.read_sql(query, connection, params={'trade_date': trade_date})
+            return df_db
+        except Exception as e:
+            print(f"从 {table_name} 读取 {trade_date} 数据失败: {e}。")
+            return df_api
+
+
     # --- (五) 宏观经济 (同步) ---
     @api_rate_limit()
     def get_cn_m(self, start_m, end_m, force_update=False):
@@ -385,13 +782,18 @@ class DataManager:
         return self._fetch_and_cache(self.pro.cn_pmi, 'macro_cn_pmi', force_update=force_update, start_m=start_m, end_m=end_m)
     
     @api_rate_limit()
-    def get_cn_cpi(self, start_m, end_m, force_update=False):
-        """【V2.0新增】获取全国居民消费价格指数CPI"""
+    def get_cn_cpi(self, start_m: str = None, end_m: str = None, force_update=False):
+        """【V2.1激活】获取全国居民消费价格指数CPI，使用通用缓存"""
         return self._fetch_and_cache(self.pro.cn_cpi, 'macro_cn_cpi', force_update=force_update, start_m=start_m, end_m=end_m)
 
     @api_rate_limit()
-    def get_shibor(self, start_date, end_date, force_update=False):
-        """【V2.0新增】获取Shibor同业拆放利率"""
+    def get_cn_gdp(self, start_q: str = None, end_q: str = None, force_update=False):
+        """【V2.1新增】获取季度GDP数据，使用通用缓存"""
+        return self._fetch_and_cache(self.pro.cn_gdp, 'macro_cn_gdp', force_update=force_update, start_q=start_q, end_q=end_q)
+
+    @api_rate_limit()
+    def get_shibor(self, start_date: str = None, end_date: str = None, force_update=False):
+        """【V2.1激活】获取Shibor同业拆放利率，使用通用缓存"""
         return self._fetch_and_cache(self.pro.shibor, 'macro_shibor', force_update=force_update, start_date=start_date, end_date=end_date)
 
     # --- (六) 异步数据获取模块 ---
@@ -506,6 +908,30 @@ class DataManager:
         
         return available_data.head(1)
     
+    def purge_old_ai_reports(self, ts_code: str, keep_latest: int = 10):
+        """【V2.1新增】清理指定股票的旧AI报告，仅保留最新的N份。"""
+        try:
+            with self.engine.connect() as connection:
+                with connection.begin():
+                    # 使用窗口函数和子查询来确定要删除的旧报告
+                    # 这是一个健壮的、在各种SQL方言中都有效的方法
+                    delete_sql = sqlalchemy.text(f"""
+                        DELETE FROM ai_reports
+                        WHERE ctid IN (
+                            SELECT ctid FROM (
+                                SELECT ctid, ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) as rn
+                                FROM ai_reports
+                                WHERE ts_code = :ts_code
+                            ) as sub
+                            WHERE sub.rn > :keep_latest
+                        )
+                    """)
+                    result = connection.execute(delete_sql, {'ts_code': ts_code, 'keep_latest': keep_latest})
+                    if result.rowcount > 0:
+                        log.info(f"为 {ts_code} 清理了 {result.rowcount} 份旧的AI报告。")
+        except Exception as e:
+            log.error(f"清理 {ts_code} 的AI报告时出错: {e}", exc_info=True)
+
     def __del__(self):
         """关闭数据库连接和异步会话"""
         # SQLAlchemy 引擎通常不需要手动关闭，连接池会管理

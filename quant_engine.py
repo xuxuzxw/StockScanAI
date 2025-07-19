@@ -152,15 +152,21 @@ class FactorFactory:
 
     # --- C. 基本面因子 ---
     def calc_roe(self, ts_code: str, date: str, **kwargs) -> float:
-        """【PIT修正】获取指定日期可得的最新财报的ROE(摊薄)"""
-        all_fina = self.data_manager.get_fina_indicator(ts_code)
-        if all_fina is None or all_fina.empty:
-            return np.nan
+        """【V2.1重构-健壮性】获取指定日期可得的最新财报的ROE(摊薄)"""
+        try:
+            all_fina = self.data_manager.get_fina_indicator(ts_code)
+            if all_fina is None or all_fina.empty:
+                return np.nan
 
-        latest_fina = self.data_manager.get_pit_financial_data(all_fina, as_of_date=date)
-        if latest_fina is None or latest_fina.empty or 'roe' not in latest_fina.columns:
+            latest_fina = self.data_manager.get_pit_financial_data(all_fina, as_of_date=date)
+            if latest_fina is None or latest_fina.empty:
+                # log.debug(f"在日期 {date} 未找到 {ts_code} 的有效PIT财务数据。")
+                return np.nan
+                
+            return latest_fina['roe'].iloc[0]
+        except (KeyError, IndexError) as e:
+            log.warning(f"计算ROE因子 for {ts_code} on {date} 时出错: {e}")
             return np.nan
-        return latest_fina['roe'].iloc[0]
 
     def calc_pe_ttm(self, ts_code: str, date: str) -> float:
         """获取指定日期的PE TTM"""
@@ -170,40 +176,243 @@ class FactorFactory:
         return df_basic['pe_ttm'].iloc[0]
 
     def calc_growth_revenue_yoy(self, ts_code: str, date: str, **kwargs) -> float:
-        """【PIT修正】获取指定日期可得的最新财报的营业收入同比增长率(%)"""
-        all_fina = self.data_manager.get_fina_indicator(ts_code)
-        if all_fina is None or all_fina.empty:
-            return np.nan
+        """【V2.1重构-健壮性】获取指定日期可得的最新财报的营业收入同比增长率(%)"""
+        try:
+            all_fina = self.data_manager.get_fina_indicator(ts_code)
+            if all_fina is None or all_fina.empty:
+                return np.nan
 
-        latest_fina = self.data_manager.get_pit_financial_data(all_fina, as_of_date=date)
-        if latest_fina is None or latest_fina.empty:
-            return np.nan
+            latest_fina = self.data_manager.get_pit_financial_data(all_fina, as_of_date=date)
+            if latest_fina is None or latest_fina.empty:
+                # log.debug(f"在日期 {date} 未找到 {ts_code} 的有效PIT财务数据。")
+                return np.nan
 
-        # get_pit_financial_data returns a DataFrame with one row
-        latest_fina_row = latest_fina.iloc[0]
-
-        # 优先使用 'or_yoy' 字段
-        if 'or_yoy' in latest_fina_row.index and pd.notna(latest_fina_row['or_yoy']):
-            return latest_fina_row['or_yoy']
-        
-        # 如果 'or_yoy' 不存在或为空，记录警告并回退到 'netprofit_yoy'
-        log.warning(f"字段 'or_yoy' 在 {ts_code} 的财报中缺失, 回退使用 'netprofit_yoy'。")
-        if 'netprofit_yoy' in latest_fina_row.index and pd.notna(latest_fina_row['netprofit_yoy']):
-            return latest_fina_row['netprofit_yoy']
+            latest_fina_row = latest_fina.iloc[0]
             
-        return np.nan
+            # 优先使用 'or_yoy' 字段
+            if 'or_yoy' in latest_fina_row.index and pd.notna(latest_fina_row['or_yoy']):
+                return latest_fina_row['or_yoy']
+            
+            # 回退到 'netprofit_yoy'
+            if 'netprofit_yoy' in latest_fina_row.index and pd.notna(latest_fina_row['netprofit_yoy']):
+                return latest_fina_row['netprofit_yoy']
+            
+            return np.nan
+        except (KeyError, IndexError) as e:
+            log.warning(f"计算营收增长率因子 for {ts_code} on {date} 时出错: {e}")
+            return np.nan
 
     def calc_debt_to_assets(self, ts_code: str, date: str, **kwargs) -> float:
-        """【PIT修正】获取指定日期可得的最新财报的资产负债率(%)"""
-        all_fina = self.data_manager.get_fina_indicator(ts_code)
-        if all_fina is None or all_fina.empty:
+        """【V2.1重构-健壮性】获取指定日期可得的最新财报的资产负债率(%)"""
+        try:
+            all_fina = self.data_manager.get_fina_indicator(ts_code)
+            if all_fina is None or all_fina.empty:
+                return np.nan
+                
+            latest_fina = self.data_manager.get_pit_financial_data(all_fina, as_of_date=date)
+            if latest_fina is None or latest_fina.empty:
+                # log.debug(f"在日期 {date} 未找到 {ts_code} 的有效PIT财务数据。")
+                return np.nan
+                
+            return latest_fina['debt_to_assets'].iloc[0]
+        except (KeyError, IndexError) as e:
+            log.warning(f"计算资产负债率因子 for {ts_code} on {date} 时出错: {e}")
+            return np.nan
+
+    # --- D. 筹码类因子 (V2.1新增) ---
+    def calc_holder_num_change_ratio(self, ts_code: str, date: str, **kwargs) -> float:
+        """【V2.1新增】计算最新一期股东人数相对上一期的变化率(%)。负值表示筹码集中。"""
+        df_holder_num = self.data_manager.get_holder_number(ts_code)
+        if df_holder_num is None or df_holder_num.empty or len(df_holder_num) < 2:
+            return np.nan
+
+        # 筛选出公告日在指定日期之前的数据
+        df_holder_num['ann_date'] = pd.to_datetime(df_holder_num['ann_date'])
+        as_of_date_dt = pd.to_datetime(date)
+        available_data = df_holder_num[df_holder_num['ann_date'] <= as_of_date_dt].copy()
+
+        if len(available_data) < 2:
+            return np.nan
+
+        # 按报告期（end_date）降序排序，获取最新的两期财报
+        available_data = available_data.sort_values(by='end_date', ascending=False)
+        latest_num = available_data.iloc[0]['holder_num']
+        previous_num = available_data.iloc[1]['holder_num']
+
+        if previous_num is None or previous_num == 0:
+            return np.nan
+
+        return (latest_num - previous_num) / previous_num
+
+    def calc_major_shareholder_net_buy_ratio(self, ts_code: str, date: str, lookback_days=90, **kwargs) -> float:
+        """【V2.1新增】计算近N日重要股东增减持金额占自由流通市值的比例(%)。"""
+        end_date_dt = pd.to_datetime(date)
+        start_date_str = (end_date_dt - pd.Timedelta(days=lookback_days)).strftime('%Y%m%d')
+        end_date_str = end_date_dt.strftime('%Y%m%d')
+        
+        df_trade = self.data_manager.get_holder_trade(ts_code, start_date_str, end_date_str)
+        if df_trade is None or df_trade.empty:
+            return 0.0
+
+        # Tushare中，增持的in_de='IN', 减持='DE'
+        df_trade['change_value'] = df_trade['change_vol'] * df_trade['avg_price']
+        net_buy_value = df_trade[df_trade['in_de'] == 'IN']['change_value'].sum() - \
+                        df_trade[df_trade['in_de'] == 'DE']['change_value'].sum()
+        
+        # 获取最新的流通市值
+        df_basic = self.data_manager.get_daily_basic(ts_code, end_date_str, end_date_str)
+        if df_basic is None or df_basic.empty or 'float_share' not in df_basic.columns:
+            return np.nan
+        
+        # 流通股本单位是万股，总市值单位是万元，需统一
+        float_cap = df_basic['float_share'].iloc[0] * df_basic['close'].iloc[0] # 单位: 万*元
+        if float_cap == 0:
+            return np.nan
+
+        # 增减持金额单位是万元，流通市值单位也是万元
+        return (net_buy_value / float_cap) * 100 # 返回百分比
+
+    def calc_top_list_net_buy_amount(self, ts_code: str, date: str, top_list_df: pd.DataFrame) -> float:
+        """【V2.1新增】从当日龙虎榜数据中，获取该股的净买入额(万元)。"""
+        if top_list_df is None or top_list_df.empty:
+            return 0.0
+        
+        stock_on_list = top_list_df[top_list_df['ts_code'] == ts_code]
+        if stock_on_list.empty:
+            return 0.0
+            
+        # 一个票可能因为多个原因上榜，这里简单求和
+        return stock_on_list['net_amount'].sum()
+
+    def calc_block_trade_ratio(self, ts_code: str, date: str, block_trade_df: pd.DataFrame, lookback_days=90, **kwargs) -> float:
+        """【V2.1新增】计算近N日大宗交易成交额占期间总成交额的比例(%)。"""
+        # 1. 从传入的DataFrame中筛选出该股的数据
+        if block_trade_df is None or block_trade_df.empty:
+            return 0.0
+        
+        stock_block_trade = block_trade_df[block_trade_df['ts_code'] == ts_code]
+        if stock_block_trade.empty:
+            return 0.0
+
+        block_trade_amount_sum = stock_block_trade['amount'].sum() # 单位：万元
+
+        # 2. 获取区间总成交额
+        end_date_dt = pd.to_datetime(date)
+        start_date_str = (end_date_dt - pd.Timedelta(days=lookback_days)).strftime('%Y%m%d')
+        df_daily = self.data_manager.get_daily(ts_code, start_date_str, date)
+        
+        if df_daily is None or df_daily.empty:
             return np.nan
             
-        latest_fina = self.data_manager.get_pit_financial_data(all_fina, as_of_date=date)
-        if latest_fina is None or latest_fina.empty or 'debt_to_assets' not in latest_fina.columns:
+        total_amount = df_daily['amount'].sum() # 单位：千元
+        total_amount_wan = total_amount / 10 # 转换为万元
+
+        if total_amount_wan == 0:
             return np.nan
-        return latest_fina['debt_to_assets'].iloc[0]
-    # --- D. 筹码类因子 ---
+
+        return (block_trade_amount_sum / total_amount_wan) * 100
+
+    # --- E. 价值与回报类因子 (V2.1新增) ---
+    def calc_dividend_yield(self, ts_code: str, date: str, **kwargs) -> float:
+        """【V2.1新增】计算最新的TTM股息率(%)。"""
+        # 1. 获取近12个月的每股分红
+        end_date_dt = pd.to_datetime(date)
+        start_date_12m = (end_date_dt - pd.Timedelta(days=365)).strftime('%Y%m%d')
+        df_dividend = self.data_manager.get_dividend(ts_code)
+        
+        if df_dividend is None or df_dividend.empty:
+            return 0.0
+            
+        # 筛选出在过去一年内、且在观察日期前已公告的分红
+        df_dividend['ann_date'] = pd.to_datetime(df_dividend['ann_date'])
+        recent_dividends = df_dividend[
+            (df_dividend['ann_date'] >= start_date_12m) &
+            (df_dividend['ann_date'] <= end_date_dt)
+        ].copy()
+        
+        if recent_dividends.empty:
+            return 0.0
+        
+        # 计算每股现金分红总额
+        total_cash_div = recent_dividends['cash_div_tax'].sum()
+        
+        # 2. 获取当日股价
+        df_basic = self.data_manager.get_daily_basic(ts_code, date, date)
+        if df_basic is None or df_basic.empty:
+            return np.nan
+        
+        price = df_basic['close'].iloc[0]
+        if price == 0:
+            return np.nan
+            
+        return (total_cash_div / price) * 100
+
+    def calc_forecast_growth_rate(self, ts_code: str, date: str, **kwargs) -> float:
+        """【V2.1新增】获取最新一期已公告的业绩预告净利润增长率(%)。取预告区间的平均值。"""
+        end_date_dt = pd.to_datetime(date)
+        start_date_hist = (end_date_dt - pd.Timedelta(days=365)).strftime('%Y%m%d') # 回看一年内的预告
+        
+        df_forecast = self.data_manager.get_forecast(ts_code, start_date_hist, date)
+        if df_forecast is None or df_forecast.empty:
+            return np.nan
+            
+        # 筛选出在指定日期或之前已公告的数据，并按公告日排序
+        df_forecast['ann_date'] = pd.to_datetime(df_forecast['ann_date'])
+        available_forecast = df_forecast[df_forecast['ann_date'] <= end_date_dt].sort_values(by='ann_date', ascending=False)
+        
+        if available_forecast.empty:
+            return np.nan
+            
+        latest_forecast = available_forecast.iloc[0]
+        # 取预告增长率的中间值
+        avg_growth = (latest_forecast['p_change_min'] + latest_forecast['p_change_max']) / 2
+        return avg_growth
+
+    def calc_repurchase_ratio(self, ts_code: str, date: str, lookback_days=365, **kwargs) -> float:
+        """【V2.1新增】计算近N日累计回购金额占当前总市值的比例(%)。"""
+        end_date_dt = pd.to_datetime(date)
+        start_date_str = (end_date_dt - pd.Timedelta(days=lookback_days)).strftime('%Y%m%d')
+        end_date_str = end_date_dt.strftime('%Y%m%d')
+
+        df_repurchase = self.data_manager.get_repurchase(ts_code, start_date_str, end_date_str)
+        if df_repurchase is None or df_repurchase.empty:
+            return 0.0
+            
+        total_repurchase_amount = df_repurchase['amount'].sum() # 单位: 万元
+        
+        # 获取最新的总市值
+        df_basic = self.data_manager.get_daily_basic(ts_code, end_date_str, end_date_str)
+        if df_basic is None or df_basic.empty or 'total_mv' not in df_basic.columns:
+            return np.nan
+        
+        total_market_value = df_basic['total_mv'].iloc[0] # 单位: 万元
+        if total_market_value == 0:
+            return np.nan
+            
+        return (total_repurchase_amount / total_market_value) * 100
+
+    def calculate(self, factor_name: str, **kwargs) -> float:
+        """
+        【V2.1重构】统一的因子计算入口。
+        根据因子名称，自动调用对应的 calc_ 方法。
+        :param factor_name: 因子名称，如 'momentum'。
+        :param kwargs: 计算所需的所有参数，如 ts_code, date, start_date, end_date 等。
+        :return: 因子值。
+        """
+        try:
+            # 构造计算方法的名称，例如 'calc_momentum'
+            method_name = f"calc_{factor_name}"
+            # 使用 getattr 获取对应的计算方法
+            calc_method = getattr(self, method_name)
+            # 直接传递所有可能的参数，由具体的计算方法按需取用
+            return calc_method(**kwargs)
+        except AttributeError:
+            log.error(f"因子 '{factor_name}' 的计算方法 '{method_name}' 在 FactorFactory 中未定义。")
+            return np.nan
+        except Exception as e:
+            # log.debug(f"计算因子 '{factor_name}' for {kwargs.get('ts_code')} 时出错: {e}")
+            return np.nan
+
     def calc_top10_holder_ratio(self, ts_code: str, date: str, **kwargs) -> float:
         """【PIT修正】获取指定日期可得的最新报告期的前十大流通股东持股比例总和(%)"""
         target_date = pd.to_datetime(date, format='%Y%m%d')

@@ -65,3 +65,6 @@ if __name__ == '__main__':
         reset_and_initialize_database()
     else:
         print("操作已取消。")
+    
+    # 增加暂停机制，等待用户按键后退出
+    input("\n任务执行完毕，按 Enter 键退出...")

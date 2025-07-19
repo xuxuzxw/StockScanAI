@@ -9,13 +9,24 @@ import os
 
 # 导入项目模块
 import data
+import quant_engine
 from logger_config import log
 from data_extractor import get_cache_filename # 导入缓存文件名函数
 
 # ... (FACTORS_TO_CALCULATE 列表保持不变)
 FACTORS_TO_CALCULATE = [
+    # 基本面
     'pe_ttm', 'roe', 'growth_revenue_yoy', 'debt_to_assets',
-    'momentum', 'volatility', 'net_inflow_ratio'
+    # 技术面
+    'momentum', 'volatility',
+    # 资金面
+    'net_inflow_ratio',
+    # 筹码面 (V2.1新增)
+    'holder_num_change_ratio', 'major_shareholder_net_buy_ratio', 'top_list_net_buy_amount',
+    # 价值回报 (V2.1新增)
+    'dividend_yield', 'forecast_growth_rate', 'repurchase_ratio',
+    # 交易行为 (V2.1新增)
+    'block_trade_ratio'
 ]
 
 class FactorCalculatorFromCache:
@@ -35,6 +46,8 @@ class FactorCalculatorFromCache:
         self.daily_basics_df = None
         self.money_flow_df = None
         self.all_fina_df = None
+        self.top_list_df = None
+        self.block_trade_df = None
 
     def _load_data_from_cache(self) -> bool:
         """步骤1: 从本地HDF5文件加载数据，速度极快。"""
@@ -49,65 +62,47 @@ class FactorCalculatorFromCache:
             self.daily_basics_df = store.get('daily_basics')
             self.money_flow_df = store.get('money_flow')
             self.all_fina_df = store.get('all_fina')
+            if 'top_list' in store.keys():
+                self.top_list_df = store.get('top_list')
+            if 'block_trade' in store.keys():
+                self.block_trade_df = store.get('block_trade')
         
         self.ts_codes = self.stock_list['ts_code'].tolist()
         log.info("【数据加载】所有数据从缓存加载完毕。")
         return True
 
     def calculate_factors(self) -> pd.DataFrame:
-        """步骤2: 在内存中进行向量化计算。"""
+        """【V2.1重构】步骤2: 统一化、自动化计算所有因子。"""
         if not self._load_data_from_cache():
             return pd.DataFrame()
             
-        log.info("【因子计算】开始向量化计算所有因子...")
-        # (这部分计算逻辑与上一个版本完全相同)
-        results = {}
-        # ... (省略与上一版完全相同的向量化计算代码) ...
-        # --- 向量化计算：价格类因子 (动量, 波动率) ---
-        if self.daily_prices_df is not None and not self.daily_prices_df.empty:
-            log.info("  正在计算价格类因子...")
-            prices = self.daily_prices_df.ffill()
-            if len(prices) >= 21:
-                results['momentum'] = prices.iloc[-1] / prices.iloc[-21] - 1
-            if len(prices) >= 20:
-                log_returns = np.log(prices / prices.shift(1))
-                results['volatility'] = log_returns.iloc[-20:].std() * np.sqrt(252)
-
-        # --- 向量化计算：基于当日截面数据的因子 ---
-        log.info("  正在计算截面类因子...")
-        if self.daily_basics_df is not None and not self.daily_basics_df.empty:
-            basics = self.daily_basics_df.set_index('ts_code')
-            results['pe_ttm'] = basics['pe_ttm']
-            
-            if self.money_flow_df is not None and not self.money_flow_df.empty:
-                flow = self.money_flow_df.set_index('ts_code')
-                combined = basics.join(flow, how='inner')
-                amount_yuan = combined['amount'] * 1000
-                net_inflow_yuan = (combined['buy_lg_amount'] - combined['sell_lg_amount']) * 10000
-                results['net_inflow_ratio'] = net_inflow_yuan.divide(amount_yuan).fillna(0)
+        log.info("【因子计算】开始统一化计算所有因子...")
+        ff = quant_engine.FactorFactory(_data_manager=self.dm)
         
-        # --- 循环计算（已优化）：财务类因子 ---
-        log.info("  正在计算财务类因子...")
-        fina_factors = {
-            'roe': {}, 'growth_revenue_yoy': {}, 'debt_to_assets': {}
+        # 准备一个包含所有计算所需参数的字典
+        params = {
+            'date': self.trade_date,
+            'start_date': (self.trade_date_dt - pd.Timedelta(days=90)).strftime('%Y%m%d'),
+            'end_date': self.trade_date,
+            'top_list_df': self.top_list_df,
+            'block_trade_df': self.block_trade_df,
+            # 未来可以加入更多全局参数...
         }
-        if self.all_fina_df is not None:
+
+        # 统一的循环计算逻辑
+        all_factor_data = {}
+        for factor in FACTORS_TO_CALCULATE:
+            log.info(f"  正在计算因子: {factor}...")
+            # 为每个因子准备一个Series来存放结果
+            factor_series = pd.Series(index=self.ts_codes, dtype=float)
             for code in self.ts_codes:
-                all_fina = self.all_fina_df.loc[[code]]
-                if all_fina.empty:
-                    continue
-                
-                pit_fina_row = self.dm.get_pit_financial_data(all_fina, as_of_date=self.trade_date)
-                if pit_fina_row is not None and not pit_fina_row.empty:
-                    row = pit_fina_row.iloc[0]
-                    fina_factors['roe'][code] = row.get('roe')
-                    fina_factors['growth_revenue_yoy'][code] = row.get('or_yoy', row.get('netprofit_yoy'))
-                    fina_factors['debt_to_assets'][code] = row.get('debt_to_assets')
-        
-        for name, data_dict in fina_factors.items():
-            results[name] = pd.Series(data_dict)
+                params['ts_code'] = code
+                factor_series[code] = ff.calculate(factor, **params)
+            
+            all_factor_data[factor] = factor_series
 
         # --- 整合结果 ---
+        # （注意：之前的向量化部分被这个更通用的循环取代了，虽然部分计算效率可能略降，但可维护性大幅提升）
         final_df = pd.DataFrame(results).reset_index().rename(columns={'index': 'ts_code'})
         long_df = final_df.melt(id_vars='ts_code', var_name='factor_name', value_name='factor_value').dropna()
         long_df['trade_date'] = self.trade_date

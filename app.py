@@ -15,6 +15,113 @@ import data
 import intelligence
 import quant_engine
 
+# --- V2.1 UI/UX 优化：定义全局英中表头翻译字典 (白金版) ---
+COLUMN_MAPPING = {
+    # 通用
+    'ts_code': '股票代码', 'name': '股票名称', 'industry': '所属行业', 'ann_date': '公告日期',
+    'end_date': '报告期', 'trade_date': '交易日期', 'close': '收盘价', 'price': '成交价格',
+    'update_flag': '更新标识', 'f_ann_date': '首次公告日',
+
+    # 排名与因子
+    '综合得分': '综合得分', '行业综合得分': '行业综合得分',
+    
+    # 筹码类
+    'holder_name': '股东名称', 'holder_type': '股东类型', 'hold_amount': '持有数量(股)',
+    'hold_ratio': '持股比例(%)', 'hold_float_ratio': '占流通股比例(%)', 'hold_change': '变动数量(股)',
+    'in_de': '增减', 'change_ratio': '变动比例(%)', 'avg_price': '均价', 'proc': '进度',
+    'vol': '成交量(手)', 'amount': '成交额(千元)', 'high_limit': '回购最高价', 'low_limit': '回购最低价',
+    'buyer': '买方', 'seller': '卖方', 'net_amount': '净买入额(万元)', 'reason': '上榜原因',
+
+    # 财务类 - 通用
+    'report_type': '报告类型', 'comp_type': '公司类型', 'end_type': '报告期类型',
+    'revenue': '营业收入', 'operate_profit': '营业利润', 'total_profit': '利润总额',
+    'n_income': '净利润', 'total_assets': '总资产', 'total_liab': '总负债',
+    'total_hldr_eqy_exc_min_int': '归母股东权益', 'total_hldr_eqy_inc_min_int': '股东权益合计',
+    'basic_eps': '基本每股收益', 'diluted_eps': '稀释每股收益', 'diluted_roe': '稀释ROE(%)',
+    'bps': '每股净资产', 'yoy_op': '营业利润同比增长(%)', 'yoy_gr': '营业总收入同比增长(%)',
+    'yoy_net_profit': '净利润同比增长(%)',
+
+    # 财务类 - 业绩预告/快报
+    'type': '预告类型', 'p_change_min': '业绩变动(最小%)', 'p_change_max': '业绩变动(最大%)',
+    'net_profit_min': '净利润(最小)', 'net_profit_max': '净利润(最大)',
+    'last_parent_net': '上年同期归母净利润', 'first_ann_date': '首次公告日',
+    'summary': '业绩简述', 'change_reason': '变动原因', 'perf_summary': '业绩摘要',
+
+    # 财务类 - 分红送股
+    'div_proc': '分红方案', 'stk_div': '送股(股)', 'cash_div_tax': '现金分红(元)',
+
+    # 财务类 - 利润表
+    'total_revenue': '营业总收入', 'int_income': '利息收入', 'prem_earned': '已赚保费', 'comm_income': '手续费及佣金收入',
+    'n_commis_income': '手续费及佣金净收入', 'n_oth_income': '其他经营净收益', 'n_oth_b_income': '其他业务净收益',
+    'prem_income': '保险业务收入', 'out_prem': '分出保费', 'une_prem_reser': '提取未到期责任准备金',
+    'reins_income': '分保费收入', 'n_sec_tb_income': '代理买卖证券业务净收入', 'n_sec_uw_income': '证券承销业务净收入',
+    'n_asset_mg_income': '受托客户资产管理业务净收入', 'oth_b_income': '其他业务收入', 'fv_value_chg_gain': '公允价值变动收益',
+    'invest_income': '投资收益', 'ass_invest_income': '对联营和合营企业的投资收益', 'forex_gain': '汇兑收益',
+    'total_cogs': '营业总成本', 'oper_cost': '营业成本', 'int_exp': '利息支出', 'comm_exp': '手续费及佣金支出',
+    'biz_tax_surchg': '营业税金及附加', 'sell_exp': '销售费用', 'admin_exp': '管理费用', 'fin_exp': '财务费用',
+    'assets_impair_loss': '资产减值损失', 'prem_refund': '退保金', 'compens_payout': '赔付支出净额', 'compens_payout_refu': '摊回赔付支出',
+    'reser_insur_liab': '提取保险责任准备金净额', 'insur_reser_refu': '摊回保险责任准备金', 'reins_exp': '分保费用', 'reins_cost_refund': '摊回分保费用',
+    'oper_exp': '营业支出', 'other_bus_cost': '其他业务成本', 'non_oper_income': '营业外收入', 'non_oper_exp': '营业外支出',
+    'nca_disploss': '非流动资产处置损失', 'income_tax': '所得税费用', 'n_income_attr_p': '归属于母公司所有者的净利润',
+    'minority_gain': '少数股东损益', 'oth_compr_income': '其他综合收益', 't_compr_income': '综合收益总额',
+    'compr_inc_attr_p': '归母综合收益总额', 'compr_inc_attr_m_s': '归属少数股东综合收益总额',
+    'ebit': '息税前利润', 'ebitda': '息税折旧摊销前利润', 'insurance_exp': '保险合同准备金', 'undist_profit': '未分配利润',
+    'distable_profit': '可分配利润', 'rd_exp': '研发费用', 'fin_exp_int_exp': '财务费用:利息费用', 'fin_exp_int_inc': '财务费用:利息收入',
+    'div_payt': '应付股利', 'transfer_surplus_rese': '盈余公积转入', 'transfer_housing_imprest': '住房周转金转入',
+    'transfer_oth': '其他转入', 'adj_lossgain': '调整损益', 'withdra_legal_surplus': '提取法定盈余公积',
+    'withdra_legal_pubfund': '提取法定公益金', 'withdra_biz_devfund': '提取企业发展基金', 'withdra_rese_fund': '提取储备基金',
+    'withdra_oth_ersu': '提取其他盈余公积', 'workers_welfare': '职工奖金福利', 'distr_profit_shrhder': '分配给股东的利润',
+    'prfshare_payable_dvd': '应付优先股股利', 'comshare_payable_dvd': '应付普通股股利', 'capit_comstock_div': '转作股本的普通股股利',
+    'continued_net_profit': '持续经营净利润',
+
+    # 财务类 - 资产负债表
+    'total_share': '总股本', 'cap_rese': '资本公积金', 'surplus_rese': '盈余公积金', 'special_rese': '专项储备',
+    'money_cap': '货币资金', 'trad_asset': '交易性金融资产', 'notes_receiv': '应收票据', 'accounts_receiv': '应收账款',
+    'oth_receiv': '其他应收款', 'prepayment': '预付款项', 'div_receiv': '应收股利', 'int_receiv': '应收利息',
+    'inventories': '存货', 'amor_exp': '长期待摊费用', 'nca_within_1y': '一年内到期的非流动资产', 'sett_rsrv': '结算备付金',
+    'loanto_oth_bank_fi': '拆出资金', 'premium_receiv': '应收保费', 'reinsur_receiv': '应收分保账款',
+    'reinsur_res_receiv': '应收分保合同准备金', 'pur_resale_fa': '买入返售金融资产', 'oth_cur_assets': '其他流动资产',
+    'total_cur_assets': '流动资产合计', 'fa_avail_for_sale': '可供出售金融资产', 'htm_invest': '持有至到期投资',
+    'lt_eqt_invest': '长期股权投资', 'invest_real_estate': '投资性房地产', 'time_deposits': '定期存款',
+    'oth_assets': '其他资产', 'lt_rec': '长期应收款', 'fix_assets': '固定资产', 'cip': '在建工程',
+    'const_materials': '工程物资', 'fixed_assets_disp': '固定资产清理', 'produc_bio_assets': '生产性生物资产',
+    'oil_and_gas_assets': '油气资产', 'intan_assets': '无形资产', 'r_and_d': '研发支出', 'goodwill': '商誉',
+    'lt_amor_exp': '长期待摊费用', 'defer_tax_assets': '递延所得税资产', 'decr_in_disbur': '发放贷款及垫款',
+    'oth_nca': '其他非流动资产', 'total_nca': '非流动资产合计', 'cash_reser_cb': '存放中央银行款项',
+    'depos_in_oth_bfi': '存放同业款项', 'prec_metals': '贵金属', 'deriv_assets': '衍生金融资产',
+    'rr_reins_une_prem': '应收分保未到期责任准备金', 'rr_reins_outstd_cla': '应收分保未决赔款准备金',
+    'rr_reins_lins_liab': '应收分保寿险责任准备金', 'rr_reins_lthins_liab': '应收分保长期健康险责任准备金',
+    'refund_depos': '存出保证金', 'ph_pledge_loans': '保户质押贷款', 'refund_cap_depos': '存出资本保证金',
+    'indep_acct_assets': '独立账户资产', 'client_depos': '其中:客户资金存款', 'client_prov': '其中:客户备付金',
+    'transac_seat_fee': '交易席位费', 'invest_as_receiv': '应收款项类投资', 'st_borr': '短期借款',
+    'lt_borr': '长期借款', 'cb_borr': '向中央银行借款', 'depos_ib_deposits': '同业及其他金融机构存放款项',
+    'loan_oth_bank': '拆入资金', 'trading_fl': '交易性金融负债', 'notes_payable': '应付票据',
+    'acct_payable': '应付账款', 'adv_receipts': '预收款项', 'sold_for_repur_fa': '卖出回购金融资产款',
+    'comm_payable': '应付手续费及佣金', 'payroll_payable': '应付职工薪酬', 'taxes_payable': '应交税费',
+    'int_payable': '应付利息', 'div_payable': '应付股利', 'oth_payable': '其他应付款', 'acc_exp': '预提费用',
+    'deferred_inc': '递延收益', 'st_bonds_payable': '应付短期债券', 'payable_to_reinsurer': '应付分保账款',
+    'rsrv_insur_cont': '保险合同准备金', 'acting_trading_sec': '代理买卖证券款', 'acting_uw_sec': '代理承销证券款',
+    'non_cur_liab_due_1y': '一年内到期的非流动负债', 'oth_cur_liab': '其他流动负债', 'total_cur_liab': '流动负债合计',
+    'bond_payable': '应付债券', 'lt_payable': '长期应付款', 'specific_payables': '专项应付款',
+    'estimated_liab': '预计负债', 'defer_tax_liab': '递延所得税负债', 'defer_inc_non_cur_liab': '非流动负债:递延收益',
+    'oth_ncl': '其他非流动负债', 'total_ncl': '非流动负债合计', 'depos_oth_bfi': '同业及其他金融机构存放款项',
+    'deriv_liab': '衍生金融负债', 'depos': '吸收存款', 'agency_bus_liab': '代理业务负债', 'oth_liab': '其他负债',
+    'prem_receiv_adva': '预收保费', 'depos_received': '存入保证金', 'ph_invest': '保户储金及投资款',
+    'reser_une_prem': '未到期责任准备金', 'reser_outstd_claims': '未决赔款准备金', 'reser_lins_liab': '寿险责任准备金',
+    'reser_lthins_liab': '长期健康险责任准备金', 'indept_acc_liab': '独立账户负债', 'pledge_borr': '质押借款',
+    'indem_payable': '应付赔付款', 'policy_div_payable': '应付保单红利', 'treasury_share': '库存股',
+    'ordin_risk_reser': '一般风险准备', 'forex_differ': '外币报表折算差额', 'invest_loss_unconf': '未确认的投资损失',
+    'minority_int': '少数股东权益', 'total_hldr_eqy_inc_min_int': '股东权益合计',
+    'total_liab_hldr_eqy': '负债和股东权益总计', 'lt_payroll_payable': '长期应付职工薪酬', 'oth_comp_income': '其他综合收益',
+    'oth_eqt_tools': '其他权益工具', 'oth_eqt_tools_p_shr': '其他权益工具:优先股', 'lending_funds': '融出资金',
+    'acc_receivable': '应收款项', 'st_fin_payable': '应付短期融资款', 'payables': '应付款项',
+    'hfs_assets': '持有待售的资产', 'hfs_sales': '持有待售的负债', 'cost_fin_assets': '融出资金',
+    'fair_value_fin_assets': '以公允价值计量的金融资产', 'contract_assets': '合同资产', 'contract_liab': '合同负债',
+    'accounts_receiv_bill': '应收票据及应收账款', 'accounts_pay': '应付票据及应付账款', 'oth_rcv_total': '其他应收款合计',
+    'fix_assets_total': '固定资产合计', 'cip_total': '在建工程合计', 'oth_pay_total': '其他应付款合计',
+    'long_pay_total': '长期应付款合计', 'debt_invest': '债权投资', 'oth_debt_invest': '其他债权投资',
+}
+
 # --- 页面基础设置 ---
 st.set_page_config(page_title="AI量化投研平台 V3 - 全功能版", page_icon="🏆", layout="wide")
 
@@ -158,21 +265,35 @@ with tab_ranker:
         st.markdown("#### (1) 配置您的多因子模型")
         from factor_calculator import FACTORS_TO_CALCULATE as available_factors
         
-        cols = st.columns(3)
+        cols = st.columns(4) 
         factor_direction = {
             'pe_ttm': -1, 'roe': 1, 'growth_revenue_yoy': 1, 'debt_to_assets': -1,
-            'momentum': 1, 'volatility': -1, 'net_inflow_ratio': 1
+            'momentum': 1, 'volatility': -1, 'net_inflow_ratio': 1,
+            'holder_num_change_ratio': -1, # 股东人数变化率越小越好
+            'major_shareholder_net_buy_ratio': 1, # 重要股东净增持比率越大越好
+            'top_list_net_buy_amount': 1, # 龙虎榜净买入额越大越好
+            'dividend_yield': 1, # 股息率越高越好
+            'forecast_growth_rate': 1, # 预告增长率越高越好
+            'repurchase_ratio': 1, # 回购比例越高越好
+            'block_trade_ratio': 1 # 大宗交易占比越高，说明该股可能在机构间关注度高
         }
 
+        # --- V2.1 重构：明确定义因子分类列表 ---
+        VALUE_FACTORS = ['pe_ttm', 'dividend_yield', 'repurchase_ratio']
+        QUALITY_GROWTH_FACTORS = ['roe', 'growth_revenue_yoy', 'debt_to_assets', 'forecast_growth_rate']
+        TECH_FINANCE_FACTORS = ['momentum', 'volatility', 'net_inflow_ratio', 'block_trade_ratio']
+        CHIP_FACTORS = ['holder_num_change_ratio', 'major_shareholder_net_buy_ratio', 'top_list_net_buy_amount']
+
         with cols[0]:
-            st.multiselect("选择价值因子", [f for f in available_factors if "pe" in f], default='pe_ttm', key="value_factors")
+            st.multiselect("价值/回报因子", [f for f in available_factors if f in VALUE_FACTORS], default=['pe_ttm', 'dividend_yield', 'repurchase_ratio'], key="value_factors")
         with cols[1]:
-            st.multiselect("选择质量/成长因子", [f for f in available_factors if any(k in f for k in ['roe', 'growth', 'debt'])], default=['roe', 'growth_revenue_yoy'], key="quality_factors")
+            st.multiselect("质量/成长因子", [f for f in available_factors if f in QUALITY_GROWTH_FACTORS], default=['roe', 'growth_revenue_yoy', 'forecast_growth_rate'], key="quality_factors")
         with cols[2]:
-            st.multiselect("选择技术/资金因子", [f for f in available_factors if any(k in f for k in ['momentum', 'volatility', 'inflow'])], default=['momentum', 'net_inflow_ratio'], key="tech_factors")
+            st.multiselect("技术/资金因子", [f for f in available_factors if f in TECH_FINANCE_FACTORS], default=['momentum', 'net_inflow_ratio'], key="tech_factors")
+        with cols[3]:
+            st.multiselect("筹码因子", [f for f in available_factors if f in CHIP_FACTORS], default=['holder_num_change_ratio', 'major_shareholder_net_buy_ratio'], key="chip_factors")
         
-        user_selection = st.session_state.value_factors + st.session_state.quality_factors + st.session_state.tech_factors
-        
+        user_selection = st.session_state.value_factors + st.session_state.quality_factors + st.session_state.tech_factors + st.session_state.chip_factors
         # --- 3. 执行排名 ---
         if st.button("🚀 开始智能排名", use_container_width=True):
             if not user_selection:
@@ -316,7 +437,9 @@ with tab_main:
 
 # --- 2. 资金与筹码 ---
 with tab_funds:
-    st.subheader("资金流向 & 股东结构")
+    st.subheader("资金流向 & 股东结构 (V2.1 增强)")
+    
+    # --- Part 1: 原有资金流分析 ---
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**主力资金流 (近30日)**")
@@ -335,7 +458,63 @@ with tab_funds:
             fig.update_layout(title="北向资金持股比例(%)", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
             st.plotly_chart(fig, use_container_width=True)
             
+    st.markdown("---")
+    # --- Part 2: V2.1 新增筹码分析 ---
+    col3, col4 = st.columns(2)
+    with col3:
+        st.markdown("**股东人数变化趋势**")
+        df_holder_num = data_manager.get_holder_number(ts_code)
+        if df_holder_num is not None and not df_holder_num.empty and len(df_holder_num) > 1:
+            df_holder_num['end_date'] = pd.to_datetime(df_holder_num['end_date'])
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df_holder_num['end_date'], y=df_holder_num['holder_num'], mode='lines+markers', name='股东人数'))
+            fig.update_layout(title="股东人数", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("暂无足够的股东人数数据。")
+
+    with col4:
+        st.markdown("**龙虎榜净买入 (近90日)**")
+        df_top_list_hist = data_manager.get_top_list(start_date=(end_date - timedelta(days=90)).strftime('%Y%m%d'), end_date=end_date_str)
+        if df_top_list_hist is not None and not df_top_list_hist.empty:
+            df_top_list_hist['trade_date'] = pd.to_datetime(df_top_list_hist['trade_date'])
+            stock_top_list = df_top_list_hist[df_top_list_hist['ts_code'] == ts_code]
+            if not stock_top_list.empty:
+                 fig = go.Figure()
+                 fig.add_trace(go.Bar(x=stock_top_list['trade_date'], y=stock_top_list['net_amount'], name='龙虎榜净买入额'))
+                 fig.update_layout(title="龙虎榜净买入(万元)", template="plotly_dark", height=300, margin=dict(l=20, r=20, t=40, b=20))
+                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                 st.info("该股近90日未登上龙虎榜。")
+        else:
+            st.warning("暂无龙虎榜数据。")
+
+    st.markdown("**重要股东增减持 (近一年)**")
+    df_holder_trade = data_manager.get_holder_trade(ts_code, start_date= (end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+    if df_holder_trade is not None and not df_holder_trade.empty:
+        df_display = df_holder_trade.sort_values(by='ann_date', ascending=True)
+        df_display = df_display[['ann_date', 'holder_name', 'in_de', 'change_ratio', 'avg_price']].rename(columns=COLUMN_MAPPING)
+        st.dataframe(df_display, use_container_width=True)
+    else:
+        st.info("该股近一年无重要股东增减持记录。")
+
+    st.markdown("**大宗交易明细 (近90日)**")
+    df_block_trade = data_manager.get_block_trade(start_date=(end_date - timedelta(days=90)).strftime('%Y%m%d'), end_date=end_date_str)
+    if df_block_trade is not None and not df_block_trade.empty:
+        stock_block_trade = df_block_trade[df_block_trade['ts_code'] == ts_code]
+        if not stock_block_trade.empty:
+            df_display = stock_block_trade.sort_values(by='trade_date', ascending=True)
+            # 修正：'price'列已加入翻译字典
+            df_display = df_display[['trade_date', 'price', 'vol', 'amount', 'buyer', 'seller']].rename(columns=COLUMN_MAPPING)
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("该股近90日无大宗交易记录。")
+    else:
+        st.info("近90日无大宗交易记录。")
+
+
     st.markdown("**前十大流通股东 (最新报告期)**")
+    # ... (原有获取十大股东的代码保持不变) ...
     latest_period = ""
     for year_offset in range(2):
         year = end_date.year - year_offset
@@ -351,37 +530,85 @@ with tab_funds:
     
     if latest_period:
         st.info(f"当前显示财报周期: {latest_period}")
-        st.dataframe(df_holders, use_container_width=True, height=385)
+        # 修正：确保所有列都被翻译
+        df_display = df_holders.rename(columns=COLUMN_MAPPING)
+        st.dataframe(df_display, use_container_width=True, height=385, hide_index=True)
     else:
         st.warning("未能获取前十大流通股东数据。")
 
 # --- 3. 深度财务 ---
 with tab_finance:
-    st.subheader("财务报表核心数据")
+    st.subheader("财务报表与前瞻指标 (V2.1 增强)")
+
+    # --- Part 1: V2.1 新增财务前瞻 ---
+    st.markdown(f"**业绩快报 (最新)**")
+    # --- V2.1 重构：创建一个统一的函数来处理转置和翻译 ---
+    def display_transposed_df(df: pd.DataFrame):
+        if df is None or df.empty:
+            return
+        # 确保只处理单行数据
+        if len(df) > 1:
+             df = df.sort_values(by='ann_date', ascending=False).head(1)
+        
+        df_display = df.T.reset_index()
+        df_display.columns = ['指标', '数值']
+        # 核心修正：使用我们强大的新字典来翻译“指标”列
+        df_display['指标'] = df_display['指标'].map(COLUMN_MAPPING).fillna(df_display['指标'])
+        df_display['数值'] = df_display['数值'].astype(str)
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+    df_express = data_manager.get_express(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+    if df_express is not None and not df_express.empty:
+        df_express['ann_date'] = pd.to_datetime(df_express['ann_date'])
+        latest_pit_express = df_express[df_express['ann_date'] <= end_date].sort_values(by='ann_date', ascending=False).head(1)
+        if not latest_pit_express.empty:
+            display_transposed_df(latest_pit_express)
+        else:
+            st.info("近一年无已披露的业绩快报。")
+    else:
+        st.info("近一年无业绩快报。")
+    
+    st.markdown(f"**业绩预告 (最新)**")
+    df_forecast = data_manager.get_forecast(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+    if df_forecast is not None and not df_forecast.empty:
+        df_forecast['ann_date'] = pd.to_datetime(df_forecast['ann_date'])
+        latest_pit_forecast = df_forecast[df_forecast['ann_date'] <= end_date].sort_values(by='ann_date', ascending=False).head(1)
+        if not latest_pit_forecast.empty:
+            display_transposed_df(latest_pit_forecast)
+        else:
+            st.info("近一年无已披露的业绩预告。")
+    else:
+        st.info("近一年无业绩预告。")
+
+    st.markdown(f"**历史分红**")
+    df_dividend = data_manager.get_dividend(ts_code)
+    if df_dividend is not None and not df_dividend.empty:
+        df_display = df_dividend.sort_values(by='end_date', ascending=True)
+        df_display = df_display[['end_date', 'ann_date', 'div_proc', 'stk_div', 'cash_div_tax']].rename(columns=COLUMN_MAPPING)
+        st.dataframe(df_display.head(), use_container_width=True, hide_index=True)
+    else:
+        st.info("无历史分红记录。")
+
+    st.markdown(f"**股票回购记录 (近一年)**")
+    df_repurchase = data_manager.get_repurchase(ts_code, start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+    if df_repurchase is not None and not df_repurchase.empty:
+        df_display = df_repurchase.sort_values(by='ann_date', ascending=True)
+        df_display = df_display[['ann_date', 'proc', 'vol', 'amount', 'high_limit', 'low_limit']].rename(columns=COLUMN_MAPPING)
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    else:
+        st.info("近一年无股票回购记录。")
+
+    st.markdown("---")
+    st.markdown("**财务报表核心数据**")
+    # --- Part 2: 原有财务报表 ---
     if latest_period:
         st.markdown(f"**利润表 ({latest_period})**")
         df_income = data_manager.get_income(ts_code, latest_period)
-        if df_income is not None and not df_income.empty:
-            # 【最终修复】确保只处理最新的一份报告，防止多行数据导致转置后出现多列
-            if len(df_income) > 1:
-                df_income = df_income.sort_values(by='ann_date', ascending=False).head(1)
-            
-            df_display = df_income.T.reset_index()
-            df_display.columns = ['指标', '数值']
-            df_display['数值'] = df_display['数值'].astype(str)
-            st.dataframe(df_display, use_container_width=True)
+        display_transposed_df(df_income)
 
         st.markdown(f"**资产负债表 ({latest_period})**")
         df_balance = data_manager.get_balancesheet(ts_code, latest_period)
-        if df_balance is not None and not df_balance.empty:
-            # 应用同样的修复逻辑
-            if len(df_balance) > 1:
-                df_balance = df_balance.sort_values(by='ann_date', ascending=False).head(1)
-                
-            df_display = df_balance.T.reset_index()
-            df_display.columns = ['指标', '数值']
-            df_display['数值'] = df_display['数值'].astype(str)
-            st.dataframe(df_display, use_container_width=True)
+        display_transposed_df(df_balance)
     else:
         st.warning("未能确定最新的财报周期，无法加载财务报表。")
 
@@ -420,6 +647,22 @@ with tab_macro:
             fig.add_hline(y=0, line_dash="dash", line_color="white")
             fig.update_layout(title="M1-M2同比增速剪刀差(%)", template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
+            
+    df_cpi = data_manager.get_cn_cpi(start_m=start_m, end_m=end_m)
+    if df_cpi is not None and not df_cpi.empty:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=df_cpi['month'], y=df_cpi['nt_yoy'], name='CPI全国同比(%)'))
+        fig.update_layout(title="居民消费价格指数 (CPI)", template="plotly_dark")
+        st.plotly_chart(fig, use_container_width=True)
+
+    df_shibor = data_manager.get_shibor(start_date=(end_date - timedelta(days=365)).strftime('%Y%m%d'), end_date=end_date_str)
+    if df_shibor is not None and not df_shibor.empty:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_shibor['date'], y=df_shibor['on'], name='隔夜', line=dict(width=1)))
+        fig.add_trace(go.Scatter(x=df_shibor['date'], y=df_shibor['1w'], name='1周', line=dict(width=1)))
+        fig.add_trace(go.Scatter(x=df_shibor['date'], y=df_shibor['1y'], name='1年', line=dict(width=2)))
+        fig.update_layout(title="上海银行间同业拆放利率 (Shibor)", template="plotly_dark")
+        st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("动态市场状态感知")
     current_regime = market_profiler.get_market_regime(end_date)

@@ -40,6 +40,12 @@ def extract_data_for_date(trade_date: str):
     log.info(f"  正在获取 {trade_date} 的全市场资金流数据...")
     money_flow_df = dm.pro.moneyflow(trade_date=trade_date)
 
+    log.info(f"  正在获取 {trade_date} 的全市场龙虎榜数据...")
+    top_list_df = dm.pro.top_list(trade_date=trade_date)
+
+    log.info(f"  正在获取 {trade_date} 的全市场大宗交易数据...")
+    block_trade_df = dm.pro.block_trade(trade_date=trade_date)
+
     # --- 2. 循环获取时序数据 ---
     log.info("  开始循环获取各股票的历史价格...")
     start_date_lookback = (pd.to_datetime(trade_date) - timedelta(days=90)).strftime('%Y%m%d')
@@ -72,6 +78,10 @@ def extract_data_for_date(trade_date: str):
             store.put('daily_basics', daily_basics_df, format='table')
         if money_flow_df is not None:
             store.put('money_flow', money_flow_df, format='table')
+        if top_list_df is not None:
+            store.put('top_list', top_list_df, format='table')
+        if block_trade_df is not None:
+            store.put('block_trade', block_trade_df, format='table')
         # HDF5不支持字典直接存储，我们将其合并为一个大的DataFrame
         if all_fina_data_cache:
             all_fina_df = pd.concat(all_fina_data_cache, names=['ts_code']).reset_index(level=1, drop=True)

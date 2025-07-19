@@ -83,11 +83,19 @@ class AITools:
         prompt = f"Please analyze the sentiment of the text and provide a score from -1 (very negative) to 1 (very positive):\n\n{text}"
         return self.orchestrator._execute_ai_call(prompt, model_choice)
 
-    def generate_narrative_report(self, structured_data: Dict, model_choice='powerful_and_expensive') -> str:
-        """【智能升级版】生成报告前，先查询上下文信息"""
+    def generate_narrative_report(self, structured_data: Dict, old_reports: list = None, model_choice='powerful_and_expensive') -> str:
+        """【V2.1增强版】生成报告前，查询上下文信息，并参考历史报告。"""
         ts_code = structured_data["股票代码"]
         end_date = structured_data["分析日期"]
         
+        # --- V2.1 新增：构建历史报告上下文 ---
+        historical_context = "无历史报告可供参考。"
+        if old_reports:
+            historical_context = ""
+            for i, report in enumerate(old_reports):
+                historical_context += f"--- 历史报告 {i+1} (日期: {report['trade_date']}) ---\n"
+                historical_context += f"{report['report_content']}\n\n"
+
         # --- 1. 获取行业对比上下文 ---
         try:
             stock_info = self.data_manager.get_stock_basic()
@@ -138,17 +146,23 @@ class AITools:
 
         # --- 3. 构建最终的Prompt ---
         prompt = f"""
-        请根据以下给出的、包含了**横向行业对比**和**纵向历史趋势**的结构化数据，生成一份全面、深入、专业的投资研究报告。
+        作为一名顶级的A股量化分析师，请根据以下信息，生成一份全面、深入、专业的投资研究报告。
 
-        **报告要求**:
-        1.  **语言风格**: 专业、客观、逻辑清晰，模仿顶级券商分析师的口吻。
-        2.  **核心结论**: 在报告开头以“投资要点”的形式，明确给出“强烈推荐”、“推荐”、“中性”或“回避”的核心投资建议。
-        3.  **【关键要求】归因式论述**: 必须详细解释得出核心结论的理由。明确指出是哪个/哪些维度的信息（例如：技术面的“动量强于行业平均”、基本面的“ROE连续改善”或资金面的“主力资金持续流入”）共同支撑了你的判断。如果存在矛盾信号（如基本面优秀但估值过高），必须指出并进行深入分析。
-        4.  **结构清晰**: 分别对技术面、资金面、基本面、筹码面、宏观环境和市场情绪进行分点论述，并在论述中自然地融入括号里的对比数据。
-        5.  **风险提示**: 在报告末尾，必须包含对潜在风险的客观提示。
+        **第一部分：历史报告回顾**
+        这是最近的2份关于该公司的历史分析报告，请你参考其中的观点和数据变化，以形成对公司发展趋势的动态认知。
+        {historical_context}
 
-        **结构化数据 (括号内为对比信息)**:
+        **第二部分：最新的结构化数据**
+        这是截止到 {end_date} 的最新数据，其中括号内为行业或历史对比信息。
         {json.dumps(structured_data, indent=2, ensure_ascii=False)}
+
+        **报告撰写要求**:
+        1.  **动态视角**: **【核心要求】** 你的分析必须体现出动态和发展的视角。结合历史报告和最新数据，明确指出公司的积极或消极变化趋势。例如，“与上一份报告相比，公司的ROE出现显著改善，表明其盈利能力正在增强”，或者“注意到股东人数连续两个报告期持续集中，这是一个积极信号”。
+        2.  **核心结论**: 在报告开头以“投资要点”的形式，明确给出“强烈推荐”、“推荐”、“中性”或“回避”的核心投资建议。
+        3.  **归因式论述**: 必须详细解释得出核心结论的理由。明确指出是哪个/哪些维度的信息（特别是对比历史后发现的变化趋势）共同支撑了你的判断。
+        4.  **【关键】完整性要求**: 你的报告必须覆盖“最新的结构化数据”中提供的**所有指标**。如果某个指标的值为 "N/A"，你必须明确指出该项指标，并说明“近期无相关数据”或“数据不适用”。**严禁在报告中忽略任何值为 "N/A" 的指标。**
+        5.  **结构清晰**: 分别对技术面、资金面、基本面、筹码面等进行分点论述。
+        6.  **风险提示**: 在报告末尾，必须包含对潜在风险的客观提示。
         """
         return self.orchestrator._execute_ai_call(prompt, model_choice)
 
@@ -229,22 +243,35 @@ def full_analysis_workflow(
     orchestrator.reset_costs()
     start_date, end_date = date_range
 
-    # --- 1. 【新增】前置缓存检查 ---
+    # --- 1. 【增强版】前置缓存检查 ---
     log.info(f"正在为 {ts_code} on {end_date} 检查AI报告缓存...")
     try:
         with data_manager.engine.connect() as conn:
-            query = text("SELECT report_content, model_used, estimated_cost FROM ai_reports WHERE trade_date = :date AND ts_code = :code")
-            cached_report = conn.execute(query, {'date': end_date, 'code': ts_code}).fetchone()
-        
-        if cached_report:
-            log.info(f"命中缓存！直接从数据库加载报告。")
-            report_content, model_used, cost = cached_report
-            cost_summary = {"total_calls": 0, "estimated_cost": cost, "model_used": model_used}
-            return f"**(报告来自缓存)**\n\n{report_content}", cost_summary
-    except Exception as e:
-        log.error(f"检查AI报告缓存时出错: {e}", exc_info=True)
+            # 检查当日报告
+            query_today = text("SELECT report_content, model_used, estimated_cost FROM ai_reports WHERE trade_date = :date AND ts_code = :code")
+            cached_report_today = conn.execute(query_today, {'date': end_date, 'code': ts_code}).fetchone()
+            
+            if cached_report_today:
+                log.info(f"命中当日缓存！直接从数据库加载报告。")
+                report_content, model_used, cost = cached_report_today
+                cost_summary = {"total_calls": 0, "estimated_cost": cost, "model_used": model_used}
+                return f"**(报告来自当日缓存)**\n\n{report_content}", cost_summary
 
-    log.info("未命中缓存，开始执行实时AI分析...")
+            # 获取最近的2份旧报告
+            query_old = text("""
+                SELECT trade_date, report_content FROM ai_reports 
+                WHERE ts_code = :code AND trade_date < :date 
+                ORDER BY trade_date DESC 
+                LIMIT 2
+            """)
+            old_reports_cursor = conn.execute(query_old, {'code': ts_code, 'date': end_date})
+            old_reports = [dict(row) for row in old_reports_cursor.mappings()]
+
+    except Exception as e:
+        log.error(f"检查或获取AI报告缓存时出错: {e}", exc_info=True)
+        old_reports = []
+
+    log.info("未命中当日缓存，开始执行实时AI分析...")
     # --- 2. 实时分析流程 ---
     latest_date_dt = datetime.strptime(end_date, '%Y%m%d')
     try:
@@ -268,18 +295,52 @@ def full_analysis_workflow(
         events = orchestrator.tools.extract_events(summary, 'medium_balanced')
         sentiment = orchestrator.tools.analyze_sentiment(summary, 'medium_balanced')
         
+        # V2.1 新增：获取筹码类因子
+        holder_num_change = factor_factory.calc_holder_num_change_ratio(ts_code, date=end_date)
+        major_shareholder_trade = factor_factory.calc_major_shareholder_net_buy_ratio(ts_code, date=end_date)
+        # 获取当日龙虎榜数据
+        top_list_df = data_manager.get_top_list(trade_date=end_date)
+        top_list_net_buy = factor_factory.calc_top_list_net_buy_amount(ts_code, end_date, top_list_df)
+
+        # V2.1 新增：获取价值回报类因子
+        dividend_yield = factor_factory.calc_dividend_yield(ts_code, date=end_date)
+        forecast_growth = factor_factory.calc_forecast_growth_rate(ts_code, date=end_date)
+        repurchase_ratio = factor_factory.calc_repurchase_ratio(ts_code, date=end_date)
+        # 获取大宗交易数据
+        block_trade_df = data_manager.get_block_trade(trade_date=end_date)
+        block_trade_ratio = factor_factory.calc_block_trade_ratio(ts_code, end_date, block_trade_df)
+
+
         final_data_payload = {
             "股票代码": ts_code,
             "分析日期": end_date,
             "技术面指标": {"momentum": f"{momentum:.2%}", "volatility": f"{volatility:.2%}"},
             "资金面指标": {"net_inflow_ratio": f"{net_inflow:.2%}", "north_hold_change": f"{north_hold:.2f}%"},
-            "基本面指标": {"roe": f"{roe:.2%}", "growth_revenue_yoy": f"{growth:.2%}", "debt_to_assets": f"{debt_ratio:.2%}"},
-            "筹码面指标": {"top10_holder_ratio": f"{holder_ratio:.2%}"},
+            "基本面指标": {
+                "roe": f"{roe:.2%}", 
+                "growth_revenue_yoy": f"{growth:.2%}", 
+                "debt_to_assets": f"{debt_ratio:.2%}",
+                # V2.1 新增
+                "dividend_yield_ttm": f"{dividend_yield:.2%}" if pd.notna(dividend_yield) else "N/A",
+                "forecast_growth_rate": f"{forecast_growth:.2%}" if pd.notna(forecast_growth) else "N/A",
+                "repurchase_ratio_1y": f"{repurchase_ratio:.4f}%" if pd.notna(repurchase_ratio) else "N/A"
+            },
+            "筹码面指标": {
+                "top10_holder_ratio": f"{holder_ratio:.2%}",
+                "holder_num_change_ratio": f"{holder_num_change:.2%}" if pd.notna(holder_num_change) else "N/A",
+                "major_shareholder_net_buy_ratio": f"{major_shareholder_trade:.4f}%" if pd.notna(major_shareholder_trade) else "N/A",
+                "top_list_net_buy_amount_sum": f"{top_list_net_buy:,.2f} 万元" if pd.notna(top_list_net_buy) else "0.00 万元",
+                "block_trade_ratio_90d": f"{block_trade_ratio:.2f}%" if pd.notna(block_trade_ratio) else "N/A"
+            },
             "宏观环境": {"最新PMI数据": latest_pmi},
             "语义分析结果": {"市场情绪": sentiment, "关键事件": events}
         }
         
-        final_report = orchestrator.tools.generate_narrative_report(final_data_payload, 'powerful_and_expensive')
+        final_report = orchestrator.tools.generate_narrative_report(
+            structured_data=final_data_payload, 
+            old_reports=old_reports, 
+            model_choice='powerful_and_expensive'
+        )
     
     except Exception as e:
         final_report = f"执行AI工作流时发生未知内部错误: {e}"
@@ -308,8 +369,12 @@ def full_analysis_workflow(
                         'cost': cost_summary['estimated_cost']
                     })
             log.info("报告缓存成功。")
+            
+            # --- V2.1 新增：调用报告清理任务 ---
+            data_manager.purge_old_ai_reports(ts_code, keep_latest=10)
+
         except Exception as e:
-            log.error(f"AI报告写入缓存失败: {e}", exc_info=True)
+            log.error(f"AI报告写入或清理失败: {e}", exc_info=True)
 
     return final_report, cost_summary
 
