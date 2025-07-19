@@ -5,12 +5,13 @@
 
 import logging
 import sys
+import os
 
 def setup_logger():
     """
     配置并返回一个全局 logger。
     - INFO 及以上级别的日志会输出到控制台。
-    - DEBUG 及以上级别的日志会写入到文件 `quant_project.log`。
+    - DEBUG 及以上级别的日志会写入到文件 `__pycache__/quant_project.log`。
     """
     # 获取根 logger
     logger = logging.getLogger("QuantProject")
@@ -27,7 +28,13 @@ def setup_logger():
     console_handler.setFormatter(console_formatter)
 
     # --- 文件 Handler ---
-    file_handler = logging.FileHandler('quant_project.log', mode='a', encoding='utf-8')
+    # 【V2.4 优化】将日志文件存储到 __pycache__ 目录中
+    log_dir = '__pycache__'
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    log_file_path = os.path.join(log_dir, 'quant_project.log')
+
+    file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
     file_handler.setLevel(logging.DEBUG) # 文件记录所有 DEBUG 及以上信息
     file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(module)s - %(lineno)d - %(message)s')
     file_handler.setFormatter(file_formatter)
