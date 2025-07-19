@@ -29,3 +29,4 @@ requests
 
 # --- 数据存储 (PostgreSQL Driver) ---
 psycopg2-binary
+akshare
