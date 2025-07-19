@@ -1,0 +1,31 @@
+# 文件: requirements.txt
+
+# --- 数据接口与处理 ---
+tushare
+pandas
+numpy
+
+# --- 前端与可视化 ---
+streamlit
+plotly
+markdown2
+
+# --- 科学计算与优化 ---
+scipy
+scikit-learn
+lightgbm
+cvxpy
+
+# --- 任务调度与异步 ---
+apscheduler
+pytz
+aiohttp
+
+# --- 配置与环境 ---
+python-dotenv
+
+# --- AI API 调用 ---
+requests
+
+# --- 数据存储 ---
+tables 

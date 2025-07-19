@@ -1,0 +1,15 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg14
+    container_name: quant_db_timescale
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=quant_user
+      - POSTGRES_PASSWORD=your_strong_password
+      - POSTGRES_DB=quant_db
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
