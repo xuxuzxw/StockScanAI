@@ -283,6 +283,26 @@ class FactorFactory:
             
         # 一个票可能因为多个原因上榜，这里简单求和
         return stock_on_list['net_amount'].sum()
+    
+    # --- F. 风险因子 (Beta Factors) (V2.3新增) ---
+    def calc_size(self, ts_code: str, date: str, **kwargs) -> float:
+        """【V2.3新增】计算市值因子（总市值的自然对数）。"""
+        df_basic = self.data_manager.get_daily_basic(ts_code, date, date)
+        if df_basic is None or df_basic.empty or 'total_mv' not in df_basic.columns:
+            return np.nan
+        # 总市值单位是万元
+        total_mv = df_basic['total_mv'].iloc[0] * 10000
+        if total_mv <= 0:
+            return np.nan
+        return np.log(total_mv)
+
+    def calc_pb(self, ts_code: str, date: str, **kwargs) -> float:
+        """【V2.3新增】计算市净率因子（作为价值因子的代表）。"""
+        df_basic = self.data_manager.get_daily_basic(ts_code, date, date)
+        if df_basic is None or df_basic.empty or 'pb' not in df_basic.columns:
+            return np.nan
+        pb = df_basic['pb'].iloc[0]
+        return pb if pb > 0 else np.nan
 
     def calc_block_trade_ratio(self, ts_code: str, date: str, block_trade_df: pd.DataFrame, lookback_days=90, **kwargs) -> float:
         """【V2.1新增】计算近N日大宗交易成交额占期间总成交额的比例(%)。"""
@@ -1169,41 +1189,168 @@ class MarketProfile:
 
 class MLAlphaStrategy:
     """
-    一个使用机器学习模型（LightGBM）进行选股的策略示例。
+    【V2.3 增强版】一个使用机器学习模型（LightGBM）进行选股的策略。
     实现了‘多模型融合引擎’(功能需求 3.2)的要求。
     """
-    def __init__(self, all_prices: pd.DataFrame, all_processed_factors: pd.DataFrame):
+    def __init__(self):
         self.model = LGBMClassifier(n_estimators=100, random_state=42)
-        self.prices = all_prices
-        self.factors = all_processed_factors
-        self.features = None
         self.is_trained = False
+        self.features_columns = []
 
-    def _prepare_data(self, forward_return_period=20):
-        """准备用于模型训练的特征(X)和目标(y)。"""
-        future_returns = self.prices.pct_change(periods=forward_return_period).shift(-forward_return_period)
+    def _prepare_data(self, all_prices: pd.DataFrame, all_factors: pd.DataFrame, forward_return_period=20, quintile=5):
+        """
+        准备用于模型训练的特征(X)和目标(y)。
+        :param all_prices: 包含所有股票价格的时间序列DataFrame。
+        :param all_factors: 包含所有因子暴露的时间序列DataFrame。
+        :param forward_return_period: 预测的未来收益周期。
+        :param quintile: 收益率分组数量，5表示取收益率最高的20%的股票作为正样本。
+        :return: X (特征), y (标签)
+        """
+        log.info("【ML数据准备】开始准备训练数据...")
+        # 1. 计算未来收益率作为标签
+        future_returns = all_prices.pct_change(periods=forward_return_period).shift(-forward_return_period)
         
-        quintiles = future_returns.stack().groupby(level=0).apply(lambda x: pd.qcut(x, 5, labels=False, duplicates='drop'))
-        target = (quintiles == 4).unstack()
+        # 2. 将收益率按分位数分组，定义正样本（例如，收益率最高的20%）
+        # 使用 rank(pct=True) 代替 qcut，健壮性更好，能处理重复值
+        ranks = future_returns.rank(axis=1, pct=True)
+        target = (ranks > (1 - 1/quintile))
 
-        self.features, self.target = self.factors.align(target, join='inner', axis=0)
-        self.target = self.target[self.features.columns]
-
-    def train(self):
-        """在准备好的数据上训练机器学习模型。"""
-        self._prepare_data()
-        X = self.features.stack().dropna()
-        y = self.target.stack().dropna()
+        # 3. 对齐因子数据（特征）和收益率数据（标签）
+        # inner join 确保只使用在两个DataFrame中都存在的时间点
+        aligned_factors, aligned_target = all_factors.align(target, join='inner', axis=0)
         
-        X, y = X.align(y, join='inner')
+        # 4. 将二维数据（时间 x 股票）转换为一维的长格式，适合机器学习
+        X = aligned_factors.stack(dropna=False).to_frame(name='factor_value').reset_index()
+        X = X.pivot_table(index=['trade_date', 'ts_code'], columns='factor_name', values='factor_value').dropna()
+        
+        y = aligned_target.stack()
+        
+        # 再次对齐，确保每个样本都有特征和标签
+        X, y = X.align(y, join='inner', axis=0)
+        
+        self.features_columns = X.columns.tolist()
+        log.info(f"【ML数据准备】数据准备完毕。共 {len(X)} 个样本，{len(self.features_columns)} 个特征。")
+        return X, y
 
-        X_train, X_test, y_train, y_test = train_test_split(X.to_frame(), y, test_size=0.3, random_state=42, shuffle=False)
+    def train(self, all_prices: pd.DataFrame, all_factors: pd.DataFrame, model_path="ml_model.pkl"):
+        """
+        在准备好的数据上训练机器学习模型，并保存到本地。
+        :param model_path: 模型保存路径。
+        :return: 训练结果的字典。
+        """
+        import joblib
+        X, y = self._prepare_data(all_prices, all_factors)
+        
+        if X.empty:
+            return {"status": "error", "message": "没有有效的训练数据。"}
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, shuffle=False)
+        
+        log.info("【ML模型训练】开始训练LightGBM分类器...")
         self.model.fit(X_train, y_train)
         self.is_trained = True
-        print("机器学习模型训练成功。")
-        print(f"测试集准确率: {self.model.score(X_test, y_test):.2%}")
+        
+        accuracy = self.model.score(X_test, y_test)
+        log.info(f"【ML模型训练】训练成功！测试集准确率: {accuracy:.2%}")
 
-    def predict_top_stocks(self, trade_date: str, top_n: int = 20) -> pd.Index:
+        # 保存模型
+        joblib.dump(self.model, model_path)
+        log.info(f"模型已保存至: {model_path}")
+
+        return {
+            "status": "success",
+            "accuracy": accuracy,
+            "features": self.features_columns,
+            "train_samples": len(X_train),
+            "test_samples": len(X_test),
+            "model_path": model_path
+        }
+
+    def load_model(self, model_path="ml_model.pkl"):
+        """从本地加载已训练好的模型。"""
+        import joblib
+        import os
+        if not os.path.exists(model_path):
+            log.error(f"模型文件不存在: {model_path}")
+            self.is_trained = False
+            return False
+        
+        self.model = joblib.load(model_path)
+        self.is_trained = True
+        log.info(f"模型已从 {model_path} 加载成功。")
+        return True
+
+    def predict_top_stocks(self, factor_snapshot: pd.DataFrame, top_n: int = 20) -> pd.Index:
+        """
+        【V2.3 增强版】使用加载的模型，对单日因子截面数据进行预测，返回得分最高的N只股票。
+        :param factor_snapshot: DataFrame, index为ts_code, columns为因子名称。
+        :return: 包含得分最高的N只股票代码的Index。
+        """
+        if not self.is_trained:
+            log.warning("模型尚未训练或加载，无法进行预测。")
+            return pd.Index([])
+
+        if factor_snapshot.empty:
+            return pd.Index([])
+
+        # 预测成为正样本（即未来高收益）的概率
+        probabilities = self.model.predict_proba(factor_snapshot)[:, 1]
+        prob_series = pd.Series(probabilities, index=factor_snapshot.index)
+        
+        return prob_series.nlargest(top_n).index
+
+
+class RiskManager:
+    """
+    【V2.3 新增】投资组合级风险管理器
+    - 负责分析一个投资组合在不同风险因子上的暴露度。
+    """
+    def __init__(self, factor_factory: FactorFactory, factor_processor: FactorProcessor):
+        self.ff = factor_factory
+        self.fp = factor_processor
+        self.risk_factors = ['size', 'pb', 'momentum', 'volatility'] # 定义要分析的风险因子
+
+    def calculate_risk_exposure(self, portfolio_weights: pd.Series, trade_date: str) -> pd.Series:
+        """
+        计算给定投资组合在指定日期的风险暴露。
+        :param portfolio_weights: Series, index为ts_code, values为权重。
+        :param trade_date: 分析日期 YYYYMMDD
+        :return: Series, index为风险因子名称, values为组合在该因子上的加权暴露值。
+        """
+        if portfolio_weights.empty:
+            return pd.Series(dtype=float)
+
+        stock_pool = portfolio_weights.index.tolist()
+        
+        # 1. 计算股票池中所有股票在当期的风险因子暴露
+        risk_factor_exposure = {}
+        for factor in self.risk_factors:
+            params = {
+                'date': trade_date,
+                'start_date': (pd.to_datetime(trade_date) - pd.Timedelta(days=365)).strftime('%Y%m%d'),
+                'end_date': trade_date,
+            }
+            raw_values = {code: self.ff.calculate(factor, ts_code=code, **params) for code in stock_pool}
+            raw_series = pd.Series(raw_values).dropna()
+
+            # 2. 对风险因子进行标准化处理，使其具有可比性
+            if not raw_series.empty:
+                processed_series = self.fp.process_factor(raw_series, neutralize=False) # 风险因子通常不进行行业中性化
+                risk_factor_exposure[factor] = processed_series
+
+        risk_df = pd.DataFrame(risk_factor_exposure)
+        
+        # 3. 计算投资组合的加权风险暴露
+        # 将持仓权重与股票的风险因子暴露对齐
+        aligned_weights, aligned_risk_df = portfolio_weights.align(risk_df, join='inner', axis=0)
+        
+        if aligned_weights.empty:
+            return pd.Series(dtype=float)
+            
+        # 核心计算：权重向量 与 风险暴露矩阵 的点积
+        portfolio_exposure = aligned_risk_df.mul(aligned_weights, axis=0).sum()
+        
+        return portfolio_exposure
         """
         使用训练好的模型预测指定日期的表现最优股票。
         """

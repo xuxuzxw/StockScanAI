@@ -251,6 +251,23 @@ class DataManager:
                         PRIMARY KEY (ts_code, end_date)
                     );
                 """))
+
+                # 【V2.2 新增】统一的财务指标主表
+                connection.execute(sqlalchemy.text("""
+                    CREATE TABLE IF NOT EXISTS financial_indicators (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE,
+                        end_date DATE NOT NULL,
+                        -- 这里只列举部分核心字段作为示例，实际字段会很多
+                        roe NUMERIC,
+                        netprofit_yoy NUMERIC,
+                        debt_to_assets NUMERIC,
+                        or_yoy NUMERIC,
+                        -- 考虑到财务指标字段繁多，未来可以采用JSONB类型存储以增加灵活性
+                        -- 但当前为保持结构清晰，仍采用列式存储
+                        PRIMARY KEY (ts_code, end_date)
+                    );
+                """))
                 # 【V2.1新增】分红送股表
                 connection.execute(sqlalchemy.text("""
                     CREATE TABLE IF NOT EXISTS financial_dividend (
@@ -522,9 +539,31 @@ class DataManager:
 
     # --- (三) 财务与基本面 (同步) ---
     @api_rate_limit()
-    def get_fina_indicator(self, ts_code, force_update=False):
-        table_name = f"fina_indicator_{ts_code.replace('.', '_')}"
-        return self._fetch_and_cache(self.pro.fina_indicator, table_name, force_update=force_update, ts_code=ts_code)
+    def get_fina_indicator(self, ts_code: str, force_update=False):
+        """【V2.2重构】获取单只股票的财务指标，适配统一大表 financial_indicators。"""
+        table_name = 'financial_indicators'
+        primary_keys = ['ts_code', 'end_date']
+
+        # 强制更新或首次获取时，从API获取
+        if force_update:
+            df_api = self.pro.fina_indicator(ts_code=ts_code)
+            if df_api is not None and not df_api.empty:
+                # 为了防止列不匹配，只选择我们在新表中定义的列
+                # 注意：这是一个简化处理，实际生产中需要一个完整的列映射
+                db_cols = ['ts_code', 'ann_date', 'end_date', 'roe', 'netprofit_yoy', 'debt_to_assets', 'or_yoy']
+                api_cols_to_keep = [col for col in db_cols if col in df_api.columns]
+                self._upsert_data(table_name, df_api[api_cols_to_keep], primary_keys)
+
+        # 无论如何，都从数据库返回该股票的完整历史数据
+        try:
+            query = sqlalchemy.text(f"SELECT * FROM {table_name} WHERE ts_code = :ts_code")
+            with self.engine.connect() as connection:
+                df_db = pd.read_sql(query, connection, params={'ts_code': ts_code})
+            return df_db.sort_values(by='end_date', ascending=False).reset_index(drop=True)
+        except Exception as e:
+            # log.error(f"从 {table_name} 读取 {ts_code} 数据失败: {e}。")
+            return pd.DataFrame()
+
 
     @api_rate_limit()
     def get_income(self, ts_code, period):

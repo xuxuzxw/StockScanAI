@@ -41,18 +41,19 @@ def main():
     scheduler.add_job(task_runner.run_daily_data_update, 'cron', day_of_week='mon-fri', hour=17, minute=30, id='daily_update_job')
     log.info("已注册任务：'每日数据更新' (周一至周五 17:30)")
     
-    # 任务2: 【升级】每日全市场因子预计算
+    # 任务2: 【V2.2 升级】每日统一数据管道
     # 在每个交易日收盘后执行
+    # 导入新脚本的执行函数
+    import run_daily_pipeline as pipeline
     scheduler.add_job(
-        factor_calculator.calculate_all_factors_for_date, 
+        pipeline.run_daily_pipeline, 
         'cron', 
-        args=[datetime.now().strftime('%Y%m%d')], # 传入当天日期作为参数
         day_of_week='mon-fri', 
         hour=18, 
         minute=0, 
-        id='daily_factor_calculation_job'
+        id='daily_pipeline_job'
     )
-    log.info("已注册任务：'每日全市场因子预计算' (周一至周五 18:00)")
+    log.info("已注册任务：'每日统一数据管道' (周一至周五 18:00)")
 
     # 任务3: 每周自动生成并发送AI投研报告
     # 使用 partial 绑定工作流所需的参数
@@ -75,6 +76,18 @@ def main():
             id=job_id
         )
         log.info(f"已注册任务：'每周AI报告 - {stock_code}' (周日 03:00)")
+
+    # 任务4: 【V2.3 新增】每日AI投研晨报生成
+    import run_strategy_daily as strategy_runner
+    scheduler.add_job(
+        strategy_runner.run_daily_strategy_workflow,
+        'cron',
+        day_of_week='mon-fri', # 每个交易日
+        hour=8, 
+        minute=0, 
+        id='daily_morning_report_job'
+    )
+    log.info("已注册任务：'每日AI投研晨报' (周一至周五 08:00)")
 
 
     log.info("调度器已启动，等待任务触发...")

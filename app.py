@@ -230,27 +230,67 @@ except ImportError:
     V2_MODULES_LOADED = False
 
 
-# --- 创建多标签页 (V3.0 升级) ---
-tab_list = ["🏆 智能选股排名", "📈 行情总览", "💰 资金与筹码", "🧾 深度财务", "🌐 宏观环境"]
+# --- 创建多标签页 (V2.2 UX 优化) ---
+# V2.2 重构：明确定义所有标签页的最终理想顺序
+all_tabs_ordered = [
+    "📈 策略看板",   # V2.3 新增
+    "🎯 市场全景", 
+    "🏭 行业透视",
+    "🏆 智能选股排名", 
+    "📈 行情总览", 
+    "💰 资金与筹码", 
+    "🧾 深度财务", 
+    "🌐 宏观环境",
+    "🤖 AI综合报告", 
+    "🔬 因子分析器", 
+    "🚀 回测实验室", 
+    "🔬 模型训练室", # V2.3 新增
+    "⚙️ 系统任务"
+]
+
+# 定义哪些标签页依赖 V2 模块
+V2_TABS = ["🎯 市场全景", "🏭 行业透视"]
+
+# 根据模块加载情况，动态生成最终的标签页列表
 if V2_MODULES_LOADED:
-    tab_list.extend(["🎯 市场全景", "🏭 行业透视"])
-tab_list.extend(["🤖 AI综合报告", "🔬 因子分析器", "🚀 回测实验室", "⚙️ 系统任务"])
+    tab_list = all_tabs_ordered
+else:
+    # 如果 V2 模块加载失败，则从理想顺序中移除对应的标签页
+    tab_list = [tab for tab in all_tabs_ordered if tab not in V2_TABS]
 
 tabs = st.tabs(tab_list)
 
-# 根据模块加载情况动态分配变量
-if V2_MODULES_LOADED:
-    tab_ranker, tab_main, tab_funds, tab_finance, tab_macro, tab_market, tab_industry, tab_ai, tab_analyzer, tab_backtest, tab_tasks = tabs
-else:
-    (tab_ranker, tab_main, tab_funds, tab_finance, tab_macro, 
-     tab_ai, tab_analyzer, tab_backtest, tab_tasks) = tabs
+# 根据最终生成的 tab_list 动态解包，更加健壮
+# 使用 dict comprehension 和 globals() 来动态创建变量，避免复杂的 if/else
+tab_mapping = {tab.replace(" ", "_").replace("🏆_", "").replace("📈_", "").replace("💰_", "").replace("🧾_", "").replace("🌐_", "").replace("🎯_", "").replace("🏭_", "").replace("🤖_", "").replace("🔬_", "").replace("🚀_", "").replace("⚙️_", ""): tab_obj for tab, tab_obj in zip(tab_list, tabs)}
+globals().update(tab_mapping)
+
+# 为 V2 模块创建占位符，以防加载失败
+if not V2_MODULES_LOADED:
     tab_market, tab_industry = None, None
+else:
+    tab_market = tab_mapping.get('市场全景')
+    tab_industry = tab_mapping.get('行业透视')
+
+# 为了代码可读性，为几个核心tab创建别名
+tab_ranker = tab_mapping.get('智能选股排名')
+tab_main = tab_mapping.get('行情总览')
+tab_funds = tab_mapping.get('资金与筹码')
+tab_finance = tab_mapping.get('深度财务')
+tab_macro = tab_mapping.get('宏观环境')
+tab_ai = tab_mapping.get('AI综合报告')
+tab_analyzer = tab_mapping.get('因子分析器')
+tab_backtest = tab_mapping.get('回测实验室')
+tab_trainer = tab_mapping.get('模型训练室') # V2.3 新增
+tab_tasks = tab_mapping.get('系统任务')
+
 
 # --- 1. 智能选股排名 ---
-with tab_ranker:
-    st.subheader("智能选股与行业轮动分析")
-    st.markdown("构建您的专属多因子模型，系统将从**行业**和**个股**两个层面进行综合打分排名，助您实现“先选赛道、再选赛马”的专业投研。")
-
+# V2.3 健壮性优化：全面使用 tab_objects.get()
+if tab_objects.get("tab_ranker"):
+    with tab_objects.get("tab_ranker"):
+        st.subheader("智能选股与行业轮动分析")
+        st.markdown("构建您的专属多因子模型，系统将从**行业**和**个股**两个层面进行综合打分排名，助您实现“先选赛道、再选赛马”的专业投研。")
     # --- 1. 获取最新交易日 ---
     try:
         cal_df = data_manager.pro.trade_cal(exchange='', start_date=(datetime.now() - timedelta(days=5)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
@@ -379,10 +419,11 @@ with tab_ranker:
                         st.exception(e)
 
 # --- 2. 行情总览 ---
-with tab_main:
-    st.subheader("日K线图 (后复权) & 综合指标")
-    df_adj = data_manager.get_adjusted_daily(ts_code, start_date_str, end_date_str, adj='hfq')
-    if df_adj is not None and not df_adj.empty:
+if tab_objects.get("tab_main"):
+    with tab_objects.get("tab_main"):
+        st.subheader("日K线图 (后复权) & 综合指标")
+        df_adj = data_manager.get_adjusted_daily(ts_code, start_date_str, end_date_str, adj='hfq')
+        if df_adj is not None and not df_adj.empty:
         # --- 1. 数据获取与合并 ---
         # 获取每日基本面指标（PE、换手率等）
         df_basic = data_manager.get_daily_basic(ts_code, start_date_str, end_date_str)
@@ -436,8 +477,9 @@ with tab_main:
         st.warning("无法获取复权行情数据。")
 
 # --- 2. 资金与筹码 ---
-with tab_funds:
-    st.subheader("资金流向 & 股东结构 (V2.1 增强)")
+if tab_funds:
+    with tab_funds:
+        st.subheader("资金流向 & 股东结构 (V2.1 增强)")
     
     # --- Part 1: 原有资金流分析 ---
     col1, col2 = st.columns(2)
@@ -537,8 +579,9 @@ with tab_funds:
         st.warning("未能获取前十大流通股东数据。")
 
 # --- 3. 深度财务 ---
-with tab_finance:
-    st.subheader("财务报表与前瞻指标 (V2.1 增强)")
+if tab_finance:
+    with tab_finance:
+        st.subheader("财务报表与前瞻指标 (V2.1 增强)")
 
     # --- Part 1: V2.1 新增财务前瞻 ---
     st.markdown(f"**业绩快报 (最新)**")
@@ -613,9 +656,10 @@ with tab_finance:
         st.warning("未能确定最新的财报周期，无法加载财务报表。")
 
 # --- 4. 宏观环境 ---
-with tab_macro:
-    st.subheader("宏观经济指标")
-    start_m = f"{end_date.year-2}{end_date.month:02d}"
+if tab_macro:
+    with tab_macro:
+        st.subheader("宏观经济指标")
+        start_m = f"{end_date.year-2}{end_date.month:02d}"
     end_m = f"{end_date.year}{end_date.month:02d}"
     df_pmi = data_manager.get_cn_pmi(start_m, end_m)
     if df_pmi is not None and not df_pmi.empty:
@@ -750,10 +794,11 @@ if V2_MODULES_LOADED and tab_industry:
                         st.exception(e)
 
 # --- 5. AI综合报告 ---
-with tab_ai:
-    st.subheader("混合AI智能体分析")
-    st.markdown("点击下方按钮，AI将采集并分析该股的 **技术、资金、财务、筹码、宏观、舆情** 六大维度数据，生成一份深度综合投研报告。")
-    if st.button("🚀 启动AI深度综合分析", help="调用混合AI引擎，对该股票进行六大维度、递进式分析，生成综合投研报告。"):
+if tab_objects.get("tab_ai"):
+    with tab_objects.get("tab_ai"):
+        st.subheader("混合AI智能体分析")
+        st.markdown("点击下方按钮，AI将采集并分析该股的 **技术、资金、财务、筹码、宏观、舆情** 六大维度数据，生成一份深度综合投研报告。")
+        if st.button("🚀 启动AI深度综合分析", help="调用混合AI引擎，对该股票进行六大维度、递进式分析，生成综合投研报告。"):
         with st.spinner("AI引擎启动...正在执行多维数据采集与深度分析工作流..."):
             try:
                 # 注意：此处的 factor_factory 已经是 quant_engine.FactorFactory 的实例
@@ -771,12 +816,13 @@ with tab_ai:
                 st.exception(e)
 
 # --- 新增: 6. 因子分析器 ---
-with tab_analyzer:
-    st.subheader("因子有效性分析实验室")
-    st.markdown("选择一个或多个因子，在指定的股票池和时间段内，进行IC/IR分析和分层回测，以评估其选股有效性。")
+if tab_objects.get("tab_analyzer"):
+    with tab_objects.get("tab_analyzer"):
+        st.subheader("因子有效性分析实验室")
+        st.markdown("选择一个或多个因子，在指定的股票池和时间段内，进行IC/IR分析和分层回测，以评估其选股有效性。")
 
-    # --- 参数配置 ---
-    st.markdown("#### 1. 配置分析参数")
+        # --- 参数配置 ---
+        st.markdown("#### 1. 配置分析参数")
     analyzer_cols = st.columns(3)
     with analyzer_cols[0]:
         # 提供一个常用的因子列表供选择
@@ -870,33 +916,49 @@ with tab_analyzer:
                     st.exception(e)
 
 # --- 7. 回测实验室 (重构版) ---
-with tab_backtest:
-    st.subheader("策略回测实验室")
-    
-    backtest_type = st.radio("选择回测类型:", ("向量化回测 (速度快，适合多因子)", "事件驱动回测 (精度高，模拟真实交易)"))
+if tab_backtest:
+    with tab_backtest:
+        st.subheader("策略回测实验室")
+        
+        backtest_type = st.radio("选择回测类型:", ("向量化回测 (速度快，适合多因子)", "事件驱动回测 (精度高，模拟真实交易)"))
 
     if backtest_type == "向量化回测 (速度快，适合多因子)":
         st.markdown("---")
         st.markdown("构建多因子策略，通过投资组合优化器生成权重，并在考虑交易成本和风控规则下进行回测。")
 
-        st.markdown("#### 1. 选择因子并设置权重策略")
+        st.markdown("#### 1. 选择策略模型")
         
-        weight_strategy = st.radio("选择权重策略:", ["固定权重", "自适应权重 (基于IC-IR)"], horizontal=True)
+        # V2.2 核心升级：增加策略选择
+        strategy_model = st.radio(
+            "选择策略模型:", 
+            ["固定权重多因子", "自适应权重 (IC-IR)", "机器学习 (LGBM)"], 
+            horizontal=True,
+            help="""
+            - **固定权重多因子**: 手动为多个因子设定固定权重，构建一个静态的选股模型。
+            - **自适应权重 (IC-IR)**: 系统会动态计算每个因子在过去的表现（ICIR），并自动为表现好的因子分配更高的权重，实现模型的动态择优。
+            """
+        )
 
-        factor_weights = {}
-        factors_to_use = ('momentum', 'volatility', 'net_inflow')
-
-        if weight_strategy == "固定权重":
-            st.markdown("##### (1) 手动设置固定权重")
+        st.markdown("#### 2. 配置因子与参数")
+        
+        # --- 策略参数配置区 ---
+        if strategy_model == "固定权重多因子":
+            st.markdown("##### (A) 手动设置固定权重")
+            factor_weights = {}
             factor_weights['momentum'] = st.slider("动量因子 (Momentum) 权重:", -1.0, 1.0, 0.5, 0.1)
             factor_weights['volatility'] = st.slider("低波动因子 (Volatility) 权重:", -1.0, 1.0, -0.3, 0.1) # 权重为负代表选取波动率低的
-            factor_weights['net_inflow'] = st.slider("资金流入因子 (Net Inflow) 权重:", -1.0, 1.0, 0.2, 0.1)
-        else:
-            st.markdown("##### (1) 配置自适应权重参数")
-            st.info("权重将基于过去一段时间内因子的IC-IR值动态计算，无需手动设置。")
+            factor_weights['net_inflow_ratio'] = st.slider("资金流入因子 (Net Inflow) 权重:", -1.0, 1.0, 0.2, 0.1)
+        
+        elif strategy_model == "自适应权重 (IC-IR)":
+            st.markdown("##### (A) 选择因子池并配置自适应参数")
+            factors_to_use_adaptive = st.multiselect(
+                "选择纳入自适应权重模型的因子池:",
+                options=['momentum', 'volatility', 'net_inflow_ratio', 'roe', 'pe_ttm', 'growth_revenue_yoy'],
+                default=['momentum', 'pe_ttm', 'roe']
+            )
             ic_lookback_days = st.slider("IC/IR 计算回看期 (天):", 30, 365, 180, 10)
-            
-        st.markdown("#### 2. 配置回测参数")
+
+        st.markdown("#### 3. 配置回测参数")
     col1, col2, col3 = st.columns(3)
     with col1:
         bt_start_date = st.date_input("回测开始日期", datetime(2023, 1, 1), key="bt_start")
@@ -950,32 +1012,21 @@ with tab_backtest:
                 rebalance_dates = rebalance_dates[(rebalance_dates >= backtest_prices.index.min()) & (rebalance_dates <= backtest_prices.index.max())]
                 st.success(f"确定了 {len(rebalance_dates)} 个调仓日。")
 
-                # --- 3. 初始化自适应策略（如果需要）---
-                adaptive_strategy = None
-                if weight_strategy == "自适应权重 (基于IC-IR)":
-                    st.info("步骤3: 初始化自适应Alpha策略引擎...")
-                    adaptive_strategy = quant_engine.AdaptiveAlphaStrategy(factor_factory, factor_processor, factor_analyzer, all_prices_df)
-                    st.success("自适应策略引擎初始化成功！")
-
-                # --- 4. 循环计算因子、优化并生成权重 ---
-                st.info("步骤4: 在每个调仓日循环计算因子和优化权重...")
+                # --- 3. 根据策略选择，初始化并执行权重生成 ---
+                st.info("步骤3: 在每个调仓日循环计算因子和优化权重...")
                 all_weights_df = pd.DataFrame(index=backtest_prices.index, columns=stock_pool)
-                
                 progress_bar = st.progress(0)
-                for i, date in enumerate(rebalance_dates):
-                    # --- A. 计算当期合成因子 ---
-                    if weight_strategy == "自适应权重 (基于IC-IR)":
-                        composite_factor, dynamic_weights = adaptive_strategy.generate_composite_factor(date, stock_pool, factors_to_use, ic_lookback_days)
-                        if i == 0: 
-                            st.write("第一次调仓日计算出的动态因子权重:")
-                            st.dataframe(dynamic_weights)
-                    else: # 固定权重
+
+                # --- A. 固定权重策略 ---
+                if strategy_model == "固定权重多因子":
+                    for i, date in enumerate(rebalance_dates):
                         composite_factor = pd.Series(dtype=float)
                         factor_date_str = date.strftime('%Y%m%d')
                         factor_start_str = (date - timedelta(days=60)).strftime('%Y%m%d')
                         for factor_name, weight in factor_weights.items():
                             if weight == 0: continue
-                            raw_values = {s: getattr(factor_factory, f"calc_{factor_name}")(ts_code=s, start_date=factor_start_str, end_date=factor_date_str) for s in stock_pool}
+                            # 注意：此处调用的是 FactorFactory 的 calculate 方法
+                            raw_values = {s: factor_factory.calculate(factor_name, ts_code=s, start_date=factor_start_str, end_date=factor_date_str) for s in stock_pool}
                             raw_series = pd.Series(raw_values).dropna()
                             if raw_series.empty: continue
                             processed_factor = factor_processor.process_factor(raw_series, neutralize=True)
@@ -983,8 +1034,94 @@ with tab_backtest:
                                 composite_factor = processed_factor.mul(weight).reindex(stock_pool).fillna(0)
                             else:
                                 composite_factor = composite_factor.add(processed_factor.mul(weight), fill_value=0)
+                        
+                        # (后续的组合优化逻辑与自适应策略共享，故移至循环外)
+                        if composite_factor.empty or composite_factor.sum() == 0: continue
+                        selected_stocks = composite_factor.nlargest(20).index
+                        cov_matrix = all_prices_df[selected_stocks].loc[:date].pct_change().iloc[-252:].cov() * 252
+                        expected_returns = composite_factor[selected_stocks]
+                        optimizer = quant_engine.PortfolioOptimizer(expected_returns, cov_matrix)
+                        optimized_weights = optimizer.optimize_max_sharpe(max_weight_per_stock=max_weight)
+                        all_weights_df.loc[date] = optimized_weights['weight']
+                        progress_bar.progress((i + 1) / len(rebalance_dates))
 
-                    # --- B. 基于合成因子进行组合优化 ---
+                # --- B. 自适应权重策略 ---
+                elif strategy_model == "自适应权重 (IC-IR)":
+                    st.info("  正在初始化自适应Alpha策略引擎...")
+                    adaptive_strategy = quant_engine.AdaptiveAlphaStrategy(factor_factory, factor_processor, factor_analyzer, all_prices_df)
+                    st.success("  自适应策略引擎初始化成功！")
+                    
+                    for i, date in enumerate(rebalance_dates):
+                        composite_factor, dynamic_weights = adaptive_strategy.generate_composite_factor(date, stock_pool, tuple(factors_to_use_adaptive), ic_lookback_days)
+                        if i == 0: 
+                            st.write("第一次调仓日计算出的动态因子权重:")
+                            st.dataframe(dynamic_weights)
+                        
+                        if composite_factor.empty or composite_factor.sum() == 0: continue
+                        selected_stocks = composite_factor.nlargest(20).index
+                        cov_matrix = all_prices_df[selected_stocks].loc[:date].pct_change().iloc[-252:].cov() * 252
+                        expected_returns = composite_factor[selected_stocks]
+                        optimizer = quant_engine.PortfolioOptimizer(expected_returns, cov_matrix)
+                        optimized_weights = optimizer.optimize_max_sharpe(max_weight_per_stock=max_weight)
+                        all_weights_df.loc[date] = optimized_weights['weight']
+                        progress_bar.progress((i + 1) / len(rebalance_dates))
+
+                # --- C. 机器学习策略 ---
+                elif strategy_model == "机器学习 (LGBM)":
+                    st.info("  正在初始化并加载机器学习模型...")
+                    ml_strategy = quant_engine.MLAlphaStrategy()
+                    model_loaded = ml_strategy.load_model() # 默认加载 ml_model.pkl
+                    
+                    if not model_loaded:
+                        st.error("错误：找不到已训练的模型文件 (ml_model.pkl)。请先在“模型训练室”中训练并保存模型。")
+                        st.stop()
+                    st.success("  模型加载成功！")
+
+                    # 获取模型需要的所有因子
+                    model_features = ml_strategy.model.feature_name_
+                    
+                    for i, date in enumerate(rebalance_dates):
+                        # 1. 获取当期所有股票的因子截面数据
+                        date_str = date.strftime('%Y-%m-%d')
+                        query = text(f"""
+                            SELECT ts_code, factor_name, factor_value
+                            FROM factors_exposure
+                            WHERE trade_date = '{date_str}'
+                            AND factor_name IN ({','.join([f"'{f}'" for f in model_features])})
+                        """)
+                        with data_manager.engine.connect() as conn:
+                            factor_data_today = pd.read_sql(query, conn)
+                        
+                        if factor_data_today.empty:
+                            continue
+                        
+                        factor_snapshot = factor_data_today.pivot(
+                            index='ts_code', columns='factor_name', values='factor_value'
+                        ).reindex(columns=model_features).dropna() # 确保列序一致并去除空值
+
+                        if factor_snapshot.empty:
+                            continue
+
+                        # 2. 使用模型预测Top N股票
+                        selected_stocks = ml_strategy.predict_top_stocks(factor_snapshot, top_n=20)
+                        
+                        # 3. 为选出的股票分配等权重
+                        if len(selected_stocks) > 0:
+                            weights = 1.0 / len(selected_stocks)
+                            optimized_weights = pd.DataFrame({'weight': weights}, index=selected_stocks)
+                            all_weights_df.loc[date] = optimized_weights['weight']
+                        
+                        progress_bar.progress((i + 1) / len(rebalance_dates))
+
+                # --- 4. 填充权重并执行回测 ---
+                st.info("步骤4: 所有调仓日权重计算完成，开始执行向量化回测...")
+                all_weights_df.fillna(0, inplace=True)
+                # 核心修正：使用 reindex 和 ffill 确保权重在整个回测期间都有效
+                all_weights_df = all_weights_df.reindex(backtest_prices.index).ffill().fillna(0)
+                st.success("权重填充完毕！")
+                
+                bt = quant_engine.VectorizedBacktester(
+                    all_prices=all_prices_df,
                     if composite_factor.empty or composite_factor.sum() == 0: continue
                     selected_stocks = composite_factor.nlargest(20).index
                     
@@ -1021,10 +1158,52 @@ with tab_backtest:
                 st.success("回测完成！")
                 st.markdown("#### 绩效指标 (已考虑交易成本与风控)")
                 st.table(results['performance'])
-                st.markdown("#### 优化后持仓权重")
+                st.markdown("#### 优化后持仓权重 (最后调仓日)")
                 st.dataframe(optimized_weights.style.format({'weight': '{:.2%}'}))
                 st.markdown("#### 净值曲线与回撤")
                 st.plotly_chart(bt.plot_results(), use_container_width=True)
+
+                # --- V2.3 新增：风险暴露分析 ---
+                st.markdown("#### 投资组合风险暴露分析")
+                with st.spinner("正在执行风险暴露分析..."):
+                    try:
+                        risk_manager = quant_engine.RiskManager(factor_factory, factor_processor)
+                        
+                        # 只在有权重的调仓日进行分析
+                        valid_rebalance_dates = all_weights_df[all_weights_df.sum(axis=1) > 0].index
+                        
+                        all_exposures = []
+                        for date in valid_rebalance_dates:
+                            portfolio_weights = all_weights_df.loc[date].dropna()
+                            portfolio_weights = portfolio_weights[portfolio_weights > 0]
+                            if not portfolio_weights.empty:
+                                exposure = risk_manager.calculate_risk_exposure(portfolio_weights, date.strftime('%Y%m%d'))
+                                exposure.name = date
+                                all_exposures.append(exposure)
+                        
+                        if all_exposures:
+                            exposure_df = pd.concat(all_exposures, axis=1).T
+                            
+                            fig = go.Figure()
+                            for factor in exposure_df.columns:
+                                fig.add_trace(go.Scatter(x=exposure_df.index, y=exposure_df[factor], mode='lines', name=factor))
+                            
+                            fig.add_hline(y=0, line_dash="dash", line_color="white")
+                            fig.update_layout(
+                                title="策略风险因子暴露度时序图",
+                                xaxis_title="日期",
+                                yaxis_title="标准化暴露值 (Z-Score)",
+                                template="plotly_dark",
+                                height=500
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                            st.caption("暴露值为正，表示您的投资组合在该风险因子上呈正向暴露（例如，偏向大市值、高动量）；值为负则相反。接近0表示在该风险上表现中性。")
+                        else:
+                            st.warning("未能计算任何日期的风险暴露。")
+
+                    except Exception as e:
+                        st.error(f"风险暴露分析失败: {e}")
+
                 st.markdown("#### 深度绩效归因 (Brinson Model)")
                 with st.spinner("正在执行Brinson归因分析..."):
                     try:
@@ -1158,12 +1337,103 @@ with tab_backtest:
                         st.error(f"事件驱动回测过程中发生错误: {e}")
                         st.exception(e)
 
-# --- 8. 系统任务 ---
-with tab_tasks:
-    st.subheader("自动化与监控中心")
+# --- V2.3 新增: 9. 模型训练室 ---
+if tab_trainer:
+    with tab_trainer:
+        st.subheader("🔬 机器学习模型训练室")
+        st.markdown("在这里，您可以选择因子（特征）和预测目标，训练您自己的机器学习选股模型，并将其应用到回测实验室中。")
+        
+        st.markdown("#### 1. 配置训练参数")
+        
+        # --- 参数配置 ---
+        train_cols = st.columns(3)
+        with train_cols[0]:
+            train_start_date = st.date_input("训练开始日期", datetime(2023, 1, 1), key="train_start")
+        with train_cols[1]:
+            train_end_date = st.date_input("训练结束日期", datetime(2024, 12, 31), key="train_end")
+        with train_cols[2]:
+            forward_period = st.number_input("预测周期(天)", 1, 60, 20, 1)
 
-    col1, col2 = st.columns(2)
-    with col1:
+        # 从因子库中获取所有可用的因子
+        try:
+            with data_manager.engine.connect() as conn:
+                all_db_factors = pd.read_sql("SELECT DISTINCT factor_name FROM factors_exposure", conn)['factor_name'].tolist()
+        except Exception:
+            all_db_factors = ['momentum', 'roe', 'pe_ttm', 'volatility', 'net_inflow_ratio'] # Fallback
+            
+        selected_features = st.multiselect(
+            "选择用作特征的因子:",
+            options=all_db_factors,
+            default=['momentum', 'roe', 'pe_ttm', 'volatility']
+        )
+        
+        st.markdown("#### 2. 开始训练")
+        if st.button("🚀 开始训练模型", use_container_width=True):
+            if not selected_features:
+                st.warning("请至少选择一个特征因子。")
+            else:
+                with st.spinner("正在执行模型训练工作流，这可能需要几分钟时间..."):
+                    try:
+                        # --- 1. 数据准备：获取价格和因子数据 ---
+                        st.info("步骤1: 准备股票池和价格数据...")
+                        stock_pool = get_stock_list()['ts_code'].tolist()[:200] # 扩大范围以获得更多样本
+                        train_start_str = train_start_date.strftime('%Y%m%d')
+                        # 需要额外获取未来N天的数据来计算收益率
+                        train_end_fetch_str = (train_end_date + timedelta(days=forward_period * 2)).strftime('%Ym%d')
+
+                        prices_dict = data_manager.run_batch_download(stock_pool, train_start_str, train_end_fetch_str)
+                        all_prices_df = pd.DataFrame({
+                            stock: df.set_index('trade_date')['close']
+                            for stock, df in prices_dict.items() if df is not None and not df.empty
+                        }).sort_index()
+                        all_prices_df.index = pd.to_datetime(all_prices_df.index)
+                        all_prices_df.dropna(axis=1, how='all', inplace=True)
+                        st.success(f"价格数据准备完成！")
+
+                        st.info("步骤2: 准备因子数据...")
+                        # 从数据库中获取所有选中因子的截面数据
+                        query = text(f"""
+                            SELECT trade_date, ts_code, factor_name, factor_value
+                            FROM factors_exposure
+                            WHERE trade_date BETWEEN '{train_start_date}' AND '{train_end_date}'
+                            AND factor_name IN ({','.join([f"'{f}'" for f in selected_features])})
+                        """)
+                        with data_manager.engine.connect() as conn:
+                            all_factor_data = pd.read_sql(query, conn)
+                        
+                        # 将长表转换为宽表 (时间 x 股票 x 因子)
+                        # 注意：我们需要一个三维结构，这里先转成 时间 x (股票_因子) 的二维结构
+                        all_factors_df = all_factor_data.pivot_table(
+                            index='trade_date', 
+                            columns=['ts_code', 'factor_name'], 
+                            values='factor_value'
+                        )
+                        all_factors_df.columns = all_factors_df.columns.droplevel(1) # 移除多重索引的第二层
+                        all_factors_df.index = pd.to_datetime(all_factors_df.index)
+                        st.success(f"因子数据准备完成！")
+
+                        # --- 2. 模型训练 ---
+                        st.info("步骤3: 实例化并训练模型...")
+                        ml_strategy = quant_engine.MLAlphaStrategy()
+                        train_results = ml_strategy.train(all_prices_df, all_factors_df)
+                        st.success("模型训练成功！")
+
+                        # --- 3. 展示结果 ---
+                        st.markdown("#### 训练结果报告")
+                        st.metric("测试集准确率", f"{train_results.get('accuracy', 0):.2%}")
+                        st.json(train_results)
+                        
+                    except Exception as e:
+                        st.error(f"模型训练过程中发生错误: {e}")
+                        st.exception(e)
+
+# --- 10. 系统任务 ---
+if tab_objects.get("tab_tasks"):
+    with tab_objects.get("tab_tasks"):
+        st.subheader("自动化与监控中心")
+
+        col1, col2 = st.columns(2)
+        with col1:
         st.markdown("#### 后台任务手动触发器")
         st.warning("【重要】以下任务耗时较长，将在后台独立运行。您可以在右侧的日志监控面板查看进度。")
         
@@ -1192,14 +1462,16 @@ with tab_tasks:
         if st.button("刷新监控状态"):
             # 1. 检查数据库连接
             try:
-                data_manager.conn.execute("SELECT 1").fetchone()
+                # 核心修正：使用 text() 将字符串标记为可执行SQL
+                data_manager.conn.execute(text("SELECT 1")).fetchone()
                 st.success("✅ **数据库连接:** 正常")
             except Exception as e:
                 st.error(f"❌ **数据库连接:** 失败 - {e}")
 
             # 2. 查询Tushare API积分
             try:
-                df_score = data_manager.pro.tushare_score()
+                # 核心修正：使用更稳健的 pro.query 方法
+                df_score = data_manager.pro.query('tushare_score')
                 if df_score is not None and not df_score.empty:
                     score = df_score.iloc[0]['score']
                     st.success(f"✅ **Tushare API积分:** {score} 分")
