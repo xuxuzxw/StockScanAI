@@ -5,11 +5,13 @@
 # 仅在您确定数据库中没有需要保留的、不可恢复的数据时使用。
 
 from sqlalchemy import create_engine, inspect, text
+
 import config
-from logger_config import log
 
 # 导入您项目中的初始化模块
 import initialize_database
+from logger_config import log
+
 
 def reset_and_initialize_database():
     """
@@ -17,21 +19,21 @@ def reset_and_initialize_database():
     此版本适用于服务器型数据库（如 PostgreSQL/TimescaleDB）。
     """
     log.info("===== 开始执行数据库重置任务（服务器模式） =====")
-    
+
     # 服务器数据库必须通过 DATABASE_URL 连接
-    if not hasattr(config, 'DATABASE_URL') or not config.DATABASE_URL:
+    if not hasattr(config, "DATABASE_URL") or not config.DATABASE_URL:
         log.error("在config.py中未找到有效的 DATABASE_URL。无法连接到数据库。")
         return
 
     try:
         engine = create_engine(config.DATABASE_URL)
         inspector = inspect(engine)
-        
+
         with engine.connect() as connection:
-            with connection.begin(): # 开启事务
+            with connection.begin():  # 开启事务
                 # 1. 获取所有表名
                 table_names = inspector.get_table_names()
-                
+
                 if not table_names:
                     log.info("数据库中没有找到任何表，无需删除。")
                 else:
@@ -39,7 +41,9 @@ def reset_and_initialize_database():
                     # 先关闭外键检查（某些数据库需要），然后删除
                     # 对于PostgreSQL, 使用 CASCADE 即可处理依赖关系
                     for table_name in table_names:
-                        connection.execute(text(f'DROP TABLE IF EXISTS "{table_name}" CASCADE;'))
+                        connection.execute(
+                            text(f'DROP TABLE IF EXISTS "{table_name}" CASCADE;')
+                        )
                     log.info("所有旧表已成功删除。")
 
     except Exception as e:
@@ -54,17 +58,19 @@ def reset_and_initialize_database():
         log.info("数据库已成功重置并初始化！")
     except Exception as e:
         log.critical("在重新初始化数据库过程中发生严重错误！", exc_info=True)
-        
+
     log.info("===== 数据库重置任务完成 =====")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # 提供一个确认步骤，防止误操作
-    confirm = input("您确定要完全清空并重建数据库中的所有表吗？这是一个不可逆的操作！(输入 'yes' 以确认): ")
-    if confirm.lower() == 'yes':
+    confirm = input(
+        "您确定要完全清空并重建数据库中的所有表吗？这是一个不可逆的操作！(输入 'yes' 以确认): "
+    )
+    if confirm.lower() == "yes":
         reset_and_initialize_database()
     else:
         print("操作已取消。")
-    
+
     # 增加暂停机制，等待用户按键后退出
     input("\n任务执行完毕，按 Enter 键退出...")

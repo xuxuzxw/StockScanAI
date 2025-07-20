@@ -88,11 +88,11 @@ V2.0 的目标是在 V1.0 的基础上，建立更完整、更强大的“宏观
     # 使用 Conda
     conda create -n quant python=3.9
     conda activate quant
-
+    
     # 或使用 venv
     # python -m venv venv
     # source venv/bin/activate  # on Windows: venv\Scripts\activate
-
+    
     pip install -r requirements.txt
     ```
 
@@ -151,6 +151,35 @@ V2.0 的目标是在 V1.0 的基础上，建立更完整、更强大的“宏观
 
 - **迁移到时序数据库 (Time-Series Database)**: 考虑将数据后端迁移到专为时间戳数据优化的数据库，如 `TimescaleDB` (基于PostgreSQL) 或 `InfluxDB`，以获得数量级的查询性能提升。
 - **完善数据ETL流程**: 基于 `backfill_data.py` 脚本，建立更稳健的数据清洗、转换和加载（ETL）流程，确保海量数据的准确性与一致性。
+
+
+
+### Docker虚拟化步骤:
+
+
+
+**第一步：启动整个平台** 在项目根目录（包含 `docker-compose.yaml` 的地方）打开命令行，执行以下命令：
+
+Bash
+
+```
+docker-compose up --build
+```
+
+- `--build` 参数会告诉Docker Compose在启动前，先根据 `Dockerfile` 构建您应用服务的新镜像。
+- 看到Docker开始下载基础镜像、安装依赖、复制文件，最后启动数据库和应用两个容器。
+
+**第二步：访问您的量化平台** 等待命令行输出类似 `quant_app_streamlit |   You can now view your Streamlit app in your browser.` 的日志后，打开您的浏览器，访问： `http://localhost:8501`
+
+将看到熟悉的Streamlit界面，但它现在已经完全运行在隔离的Docker容器中了。
+
+**第三步：停止平台** 在您之前运行命令的命令行窗口中，按下 `Ctrl + C`，Docker Compose会优雅地停止所有服务。
+
+**日常开发** 在后续的开发中，如果您修改了Python代码，由于我们设置了卷挂载，您**只需刷新浏览器**即可看到更改。如果修改了 `requirements.txt`，则需要重新构建镜像并启动：`docker-compose up --build`。
+
+至此，项目已经成功地实现了Docker虚拟化。
+
+
 
 ## 许可证
 

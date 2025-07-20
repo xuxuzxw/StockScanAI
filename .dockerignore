@@ -1,0 +1,26 @@
+# .dockerignore
+
+# Python 虚拟环境
+.venv
+venv
+
+# Python 缓存
+__pycache__
+*.pyc
+*.pyo
+
+# Docker 和 Git 相关
+.git
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yaml
+
+# 数据库物理文件和日志
+pgdata
+*.log
+
+# IDE 和操作系统配置
+.idea
+.vscode
+*.DS_Store

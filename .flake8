@@ -1,0 +1,28 @@
+# .flake8
+# This is the configuration file for the flake8 linter.
+
+[flake8]
+# --- Error Codes to Ignore ---
+# E501: line too long (we let the 'black' formatter handle this)
+# W503: line break before binary operator (black's style, which is fine)
+ignore = E501, W503
+
+# --- File/Directory Exclusions ---
+# Exclude directories that we don't need to check
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    pgdata
+
+# --- Complexity Settings ---
+# Set the maximum complexity for functions.
+# A function with too many branches/loops is hard to understand and maintain.
+# The default is 10, which is a good standard.
+max-complexity = 10
+
+# --- Line Length Settings ---
+# We delegate line length enforcement to the 'black' formatter,
+# but it's good practice to set it here for consistency.
+max-line-length = 88
