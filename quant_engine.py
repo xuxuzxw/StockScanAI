@@ -20,6 +20,82 @@ from sklearn.model_selection import train_test_split
 
 # 导入日志记录器
 from logger_config import log
+from functools import wraps
+
+
+def validate_inputs(required_params: list = None):
+    """装饰器：验证因子计算的输入参数"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if required_params:
+                for param in required_params:
+                    if param not in kwargs and len(args) <= required_params.index(param):
+                        raise ValueError(f"Required parameter '{param}' is missing")
+            
+            # Validate ts_code format if present
+            ts_code = kwargs.get('ts_code') or (args[1] if len(args) > 1 else None)
+            if ts_code and not isinstance(ts_code, str):
+                raise ValueError(f"ts_code must be string, got {type(ts_code)}")
+            
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+class QuantEngineConfig:
+    """Configuration constants for the quantitative engine"""
+    
+    # Factor calculation parameters
+    DEFAULT_MOMENTUM_WINDOW = 20
+    DEFAULT_VOLATILITY_WINDOW = 20
+    DEFAULT_RSI_WINDOW = 14
+    DEFAULT_BOLLINGER_WINDOW = 20
+    
+    # Backtest parameters
+    DEFAULT_REBALANCE_FREQ = "M"
+    DEFAULT_NUM_GROUPS = 10
+    DEFAULT_COMMISSION = 0.0003
+    DEFAULT_SLIPPAGE = 0.0002
+    
+    # Risk management
+    DEFAULT_MAX_WEIGHT_PER_STOCK = 0.1
+    DEFAULT_LOOKBACK_DAYS = 252
+    
+    # Data validation
+    MIN_STOCKS_FOR_IC = 10
+    MIN_PERIODS_FOR_IR = 5
+
+
+class QuantUtils:
+    """Utility functions for quantitative calculations"""
+    
+    @staticmethod
+    def validate_price_data(df: pd.DataFrame, min_periods: int = 1) -> bool:
+        """验证价格数据的有效性"""
+        if df is None or df.empty:
+            return False
+        if len(df) < min_periods:
+            return False
+        if 'close' not in df.columns:
+            return False
+        if df['close'].isna().all():
+            return False
+        return True
+    
+    @staticmethod
+    def safe_divide(numerator: float, denominator: float, default: float = np.nan) -> float:
+        """安全除法，避免除零错误"""
+        if denominator == 0 or pd.isna(denominator) or pd.isna(numerator):
+            return default
+        return numerator / denominator
+    
+    @staticmethod
+    def calculate_returns(prices: pd.Series, periods: int = 1) -> pd.Series:
+        """计算收益率序列"""
+        if len(prices) <= periods:
+            return pd.Series(dtype=float)
+        return prices.pct_change(periods=periods).dropna()
 
 # ############################################################################
 # --- 模块来源: quant_engine.py (原始基础模块) ---
@@ -57,9 +133,18 @@ def run_main_workflow():
         date = "20250715"  # 假设我们分析今天的因子
         start_date = "20250515"
 
-        raw_values = {
-            s: factor_factory.calc_momentum(s, start_date, date) for s in stock_pool
-        }
+        # Calculate momentum with error handling for individual stocks
+        raw_values = {}
+        for stock in stock_pool:
+            try:
+                momentum_value = factor_factory.calc_momentum(
+                    stock, start_date, date, window=QuantEngineConfig.DEFAULT_MOMENTUM_WINDOW
+                )
+                if momentum_value is not None and not pd.isna(momentum_value):
+                    raw_values[stock] = momentum_value
+            except Exception as e:
+                log.warning(f"Failed to calculate momentum for {stock}: {e}")
+                continue
         factor_series = pd.Series(raw_values, name=pd.to_datetime(date)).dropna()
         log.info(f"计算得到因子值:\n{factor_series}")
 
@@ -122,30 +207,159 @@ class FactorFactory:
 
     def __init__(self, _data_manager):
         self.data_manager = _data_manager
+        self._factor_registry = {
+            # 价格类因子
+            'momentum': self.calc_momentum,
+            'volatility': self.calc_volatility,
+            # 基本面因子
+            'pe_ttm': self.calc_pe_ttm,
+            'roe': self.calc_roe,
+            'growth_revenue_yoy': self.calc_growth_revenue_yoy,
+            'debt_to_assets': self.calc_debt_to_assets,
+            # 资金类因子
+            'net_inflow_ratio': self.calc_net_inflow_ratio,
+            'north_hold_change': self.calc_north_hold_change,
+            # 筹码类因子
+            'holder_num_change_ratio': self.calc_holder_num_change_ratio,
+            'major_shareholder_net_buy_ratio': self.calc_major_shareholder_net_buy_ratio,
+            'top_list_net_buy_amount': self.calc_top_list_net_buy_amount,
+            # 价值与回报类因子
+            'dividend_yield': self.calc_dividend_yield,
+            'forecast_growth_rate': self.calc_forecast_growth_rate,
+            'repurchase_ratio': self.calc_repurchase_ratio,
+            # 风险因子
+            'size': self.calc_size,
+            'pb': self.calc_pb,
+            'block_trade_ratio': self.calc_block_trade_ratio,
+            # 其他因子
+            'top10_holder_ratio': self.calc_top10_holder_ratio,
+            'm1_m2_scissors_gap': self.calc_m1_m2_scissors_gap,
+        }
+        # Cache method signatures for performance
+        self._method_signatures = self._build_signature_cache()
+    
+    def _build_signature_cache(self) -> dict:
+        """Build a cache of method signatures for performance optimization"""
+        import inspect
+        cache = {}
+        for factor_name, method in self._factor_registry.items():
+            try:
+                sig = inspect.signature(method)
+                cache[factor_name] = set(sig.parameters.keys())
+            except Exception as e:
+                log.warning(f"Failed to cache signature for {factor_name}: {e}")
+                cache[factor_name] = set()
+        return cache
+    
+    def _validate_required_params(self, factor_name: str, filtered_kwargs: dict) -> bool:
+        """Validate that required parameters are present for the factor calculation"""
+        # Define required parameters for each factor type
+        required_params_map = {
+            'momentum': ['ts_code', 'start_date', 'end_date'],
+            'volatility': ['ts_code', 'start_date', 'end_date'],
+            'pe_ttm': ['ts_code', 'date'],
+            'roe': ['ts_code', 'date'],
+            'size': ['ts_code', 'date'],
+            'pb': ['ts_code', 'date'],
+        }
+        
+        required_params = required_params_map.get(factor_name, [])
+        missing_params = [param for param in required_params if param not in filtered_kwargs]
+        
+        if missing_params:
+            log.warning(f"因子 '{factor_name}' 缺少必需参数: {missing_params}")
+            return False
+            
+        return True
+    
+    def get_available_factors(self) -> list:
+        """获取所有可用的因子名称"""
+        return list(self._factor_registry.keys())
+    
+    def is_factor_available(self, factor_name: str) -> bool:
+        """检查因子是否可用"""
+        return factor_name in self._factor_registry
 
     # --- A. 价格类因子 (基于复权数据) ---
+    @validate_inputs(['ts_code', 'start_date', 'end_date'])
     def calc_momentum(
-        self, ts_code: str, start_date: str, end_date: str, window=20
+        self, ts_code: str, start_date: str, end_date: str, window: int = None
     ) -> float:
-        """计算N日动量 (收益率)"""
-        df = self.data_manager.get_adjusted_daily(
-            ts_code, start_date, end_date, adj="hfq"
-        )
-        if df is None or len(df) < window:
+        """计算N日动量 (收益率)
+        
+        Args:
+            ts_code: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+            window: 计算窗口，默认使用配置值
+            
+        Returns:
+            动量因子值，计算失败时返回 np.nan
+        """
+        if window is None:
+            window = QuantEngineConfig.DEFAULT_MOMENTUM_WINDOW
+            
+        try:
+            df = self.data_manager.get_adjusted_daily(
+                ts_code, start_date, end_date, adj="hfq"
+            )
+            
+            if not QuantUtils.validate_price_data(df, window):
+                return np.nan
+                
+            # Calculate momentum using safe division
+            current_price = df["close"].iloc[-1]
+            past_price = df["close"].iloc[-window]
+            
+            return QuantUtils.safe_divide(current_price, past_price, np.nan) - 1
+            
+        except Exception as e:
+            log.debug(f"Error calculating momentum for {ts_code}: {e}")
             return np.nan
-        return df["close"].iloc[-1] / df["close"].iloc[-window] - 1
 
+    @validate_inputs(['ts_code', 'start_date', 'end_date'])
     def calc_volatility(
-        self, ts_code: str, start_date: str, end_date: str, window=20
+        self, ts_code: str, start_date: str, end_date: str, window: int = None
     ) -> float:
-        """计算N日年化波动率"""
-        df = self.data_manager.get_adjusted_daily(
-            ts_code, start_date, end_date, adj="hfq"
-        )
-        if df is None or len(df) < window:
+        """计算N日年化波动率
+        
+        Args:
+            ts_code: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+            window: 计算窗口，默认使用配置值
+            
+        Returns:
+            波动率因子值，计算失败时返回 np.nan
+        """
+        if window is None:
+            window = QuantEngineConfig.DEFAULT_VOLATILITY_WINDOW
+            
+        try:
+            df = self.data_manager.get_adjusted_daily(
+                ts_code, start_date, end_date, adj="hfq"
+            )
+            
+            if df is None or len(df) < window + 1:  # Need extra day for returns calculation
+                return np.nan
+                
+            # Calculate log returns and validate
+            log_returns = np.log(df["close"] / df["close"].shift(1)).dropna()
+            
+            if len(log_returns) < window:
+                return np.nan
+                
+            volatility = log_returns.iloc[-window:].std() * np.sqrt(252)
+            
+            # Validate result
+            if pd.isna(volatility) or volatility <= 0:
+                return np.nan
+                
+            return volatility
+            
+        except Exception as e:
+            log.debug(f"Error calculating volatility for {ts_code}: {e}")
             return np.nan
-        log_returns = np.log(df["close"] / df["close"].shift(1))
-        return log_returns.iloc[-window:].std() * np.sqrt(252)
 
     # --- B. 资金类因子 ---
     def calc_net_inflow_ratio(
@@ -491,26 +705,68 @@ class FactorFactory:
 
     def calculate(self, factor_name: str, **kwargs) -> float:
         """
-        【V2.1重构】统一的因子计算入口。
-        根据因子名称，自动调用对应的 calc_ 方法。
-        :param factor_name: 因子名称，如 'momentum'。
-        :param kwargs: 计算所需的所有参数，如 ts_code, date, start_date, end_date 等。
-        :return: 因子值。
+        【V2.2重构】统一的因子计算入口，智能参数过滤。
+        根据因子名称，自动调用对应的 calc_ 方法，并只传递需要的参数。
+        
+        Args:
+            factor_name: 因子名称，如 'momentum'
+            **kwargs: 计算所需的所有参数，如 ts_code, date, start_date, end_date 等
+            
+        Returns:
+            float: 因子值，计算失败时返回 np.nan
+            
+        Raises:
+            None: 所有异常都被捕获并返回 np.nan
         """
-        try:
-            # 构造计算方法的名称，例如 'calc_momentum'
-            method_name = f"calc_{factor_name}"
-            # 使用 getattr 获取对应的计算方法
-            calc_method = getattr(self, method_name)
-            # 直接传递所有可能的参数，由具体的计算方法按需取用
-            return calc_method(**kwargs)
-        except AttributeError:
+        # Validate factor name first
+        if not self.is_factor_available(factor_name):
+            available_factors = ', '.join(self.get_available_factors())
             log.error(
-                f"因子 '{factor_name}' 的计算方法 '{method_name}' 在 FactorFactory 中未定义。"
+                f"因子 '{factor_name}' 不可用。可用因子: {available_factors}"
             )
             return np.nan
+        
+        try:
+            # Get the calculation method
+            calc_method = self._factor_registry[factor_name]
+            
+            # Use cached signature for parameter filtering (performance optimization)
+            if factor_name in self._method_signatures:
+                method_params = self._method_signatures[factor_name]
+                filtered_kwargs = {
+                    param_name: param_value 
+                    for param_name, param_value in kwargs.items() 
+                    if param_name in method_params
+                }
+            else:
+                # Fallback to runtime inspection if cache miss
+                import inspect
+                sig = inspect.signature(calc_method)
+                filtered_kwargs = {
+                    param_name: param_value 
+                    for param_name, param_value in kwargs.items() 
+                    if param_name in sig.parameters
+                }
+            
+            # Validate required parameters are present
+            if not self._validate_required_params(factor_name, filtered_kwargs):
+                return np.nan
+            
+            # Call the method with filtered parameters
+            result = calc_method(**filtered_kwargs)
+            
+            # Validate result
+            if result is None or (isinstance(result, float) and pd.isna(result)):
+                log.debug(f"因子 '{factor_name}' 返回无效值: {result}")
+                return np.nan
+                
+            return float(result)
+            
+        except TypeError as e:
+            log.error(f"因子 '{factor_name}' 参数错误: {e}")
+            return np.nan
         except Exception as e:
-            # log.debug(f"计算因子 '{factor_name}' for {kwargs.get('ts_code')} 时出错: {e}")
+            log.debug(f"计算因子 '{factor_name}' for {kwargs.get('ts_code')} 时出错: {e}")
             return np.nan
 
     def calc_top10_holder_ratio(self, ts_code: str, date: str, **kwargs) -> float:
@@ -817,7 +1073,7 @@ class FactorAnalyzer:
         common_index = aligned_factors.index.intersection(
             aligned_returns.dropna().index
         )
-        if len(common_index) < 10:  # 如果共同的股票太少，则结果无意义
+        if len(common_index) < QuantEngineConfig.MIN_STOCKS_FOR_IC:  # 如果共同的股票太少，则结果无意义
             return np.nan, np.nan
 
         aligned_factors = aligned_factors.loc[common_index]
@@ -1481,7 +1737,7 @@ class AutomatedTasks:
             for ts_code in all_stocks[:50]:
                 try:
                     momentum = self.factor_factory.calc_momentum(
-                        ts_code, start_date, latest_date
+                        ts_code, start_date, latest_date, window=20
                     )
                     factor_data[ts_code] = {"momentum": momentum}
                 except Exception:
@@ -2724,7 +2980,7 @@ if __name__ == "__main__":
         date_str = date.strftime("%Y%m%d")
         start_date_str = (date - pd.Timedelta(days=60)).strftime("%Y%m%d")
         raw_values = {
-            s: ff.calc_momentum(s, start_date_str, date_str) for s in stock_pool
+            s: ff.calc_momentum(s, start_date_str, date_str, window=20) for s in stock_pool
         }
         momentum_factor[date] = pd.Series(raw_values)
 

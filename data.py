@@ -98,12 +98,14 @@ class DataManager:
         self.engine = sqlalchemy.create_engine(db_url)
         self._initialize_db()
 
-        # 【修正】异步组件，增加速率控制
+        # 【V2.9.1 修正】异步组件，增加速率控制
         self.semaphore = asyncio.Semaphore(concurrency_limit)
         self.session = None
-        # 根据每分钟请求数，计算出每次请求间的最小延迟（秒）
-        # 留出一些安全边际，所以用400而不是800
-        self.request_delay = 60.0 / requests_per_minute
+        # 根据每分钟请求数和并发数，计算出每次请求间的最小延迟（秒）
+        # 速率(RPS) = 并发数 / 延迟时间
+        # 目标速率(RPS) = 每分钟请求数 / 60
+        # -> 延迟时间 = (并发数 * 60) / 每分钟请求数
+        self.request_delay = (60.0 * concurrency_limit) / requests_per_minute
 
     def _upsert_data(self, table_name: str, df: pd.DataFrame, primary_keys: list[str]):
         """
@@ -145,409 +147,414 @@ class DataManager:
                     connection.execute(stmt)
 
     def _initialize_db(self):
-        """【V2.0核心改造】初始化TimescaleDB，创建Hypertable"""
+        """【V2.0核心改造】初始化TimescaleDB，创建Hypertable - 增强版"""
+        log.info("开始初始化数据库...")
+        
         with self.engine.begin() as connection:
             try:
-                # 步骤1: 启用TimescaleDB扩展
-                connection.execute(
-                    sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS timescaledb;")
-                )
-
-                # 步骤2: 创建一个通用的时序表（以日线行情为例）
-                # 注意：Pandas to_sql 会自动创建表，但我们需要预先定义主键和索引以获得最佳性能
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS ts_daily (
-                        trade_date DATE NOT NULL,
-                        ts_code TEXT NOT NULL,
-                        open NUMERIC,
-                        high NUMERIC,
-                        low NUMERIC,
-                        close NUMERIC,
-                        pre_close NUMERIC,
-                        "change" NUMERIC,
-                        pct_chg NUMERIC,
-                        vol BIGINT,
-                        amount NUMERIC,
-                        PRIMARY KEY (trade_date, ts_code)
-                    );
-                """
-                    )
-                )
-
-                # 步骤3: 将普通表转化为Hypertable（TimescaleDB的核心）
-                # 只有在表是新创建的情况下才需要执行
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('ts_daily', 'trade_date', if_not_exists => TRUE);"
-                    )
-                )
-
-                # 【增强】为复权因子表（ts_adj_factor）创建表结构和Hypertable
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS ts_adj_factor (
-                        trade_date DATE NOT NULL,
-                        ts_code TEXT NOT NULL,
-                        adj_factor NUMERIC,
-                        PRIMARY KEY (trade_date, ts_code)
-                    );
-                """
-                    )
-                )
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('ts_adj_factor', 'trade_date', if_not_exists => TRUE);"
-                    )
-                )
-
-                # 【修正版】为非结构化文本数据创建表，主键符合TimescaleDB要求
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS text_corpus (
-                        publish_date DATE NOT NULL,
-                        content_hash VARCHAR(64) NOT NULL,
-                        ts_code TEXT,
-                        title TEXT,
-                        source VARCHAR(255),
-                        content TEXT,
-                        PRIMARY KEY (publish_date, content_hash)
-                    );
-                """
-                    )
-                )
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('text_corpus', 'publish_date', if_not_exists => TRUE);"
-                    )
-                )
-
-                # 【新增】为预计算的因子暴露值创建表结构和Hypertable
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS factors_exposure (
-                        trade_date DATE NOT NULL,
-                        ts_code TEXT NOT NULL,
-                        factor_name VARCHAR(50) NOT NULL,
-                        factor_value NUMERIC,
-                        PRIMARY KEY (trade_date, ts_code, factor_name)
-                    );
-                """
-                    )
-                )
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('factors_exposure', 'trade_date', if_not_exists => TRUE);"
-                    )
-                )
-
-                # 【新增】为AI分析报告创建缓存表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS ai_reports (
-                        trade_date DATE NOT NULL,
-                        ts_code TEXT NOT NULL,
-                        report_content TEXT,
-                        model_used VARCHAR(50),
-                        estimated_cost NUMERIC,
-                        PRIMARY KEY (trade_date, ts_code)
-                    );
-                """
-                    )
-                )
-                # 这张表也可以从Hypertable中受益，便于按时间管理
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('ai_reports', 'trade_date', if_not_exists => TRUE);"
-                    )
-                )
-
-                # --- V2.1 新增表 ---
-                # 【V2.1新增】股东人数表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS stk_holdernumber (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE,
-                        end_date DATE NOT NULL,
-                        holder_num BIGINT,
-                        PRIMARY KEY (ts_code, end_date)
-                    );
-                """
-                    )
-                )
-                # 【V2.1新增】重要股东增减持表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS stk_holdertrade (
-                        ann_date DATE NOT NULL,
-                        ts_code TEXT NOT NULL,
-                        holder_name TEXT,
-                        holder_type TEXT,
-                        in_de TEXT,
-                        change_vol NUMERIC,
-                        change_ratio NUMERIC,
-                        after_share NUMERIC,
-                        after_ratio NUMERIC,
-                        avg_price NUMERIC,
-                        total_share NUMERIC,
-                        -- 复合主键，防止同一天同一股东的多笔交易记录重复
-                        PRIMARY KEY (ann_date, ts_code, holder_name, change_vol)
-                    );
-                """
-                    )
-                )
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('stk_holdertrade', 'ann_date', if_not_exists => TRUE);"
-                    )
-                )
-                # 【V2.1新增】龙虎榜每日详情表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS top_list (
-                        trade_date DATE NOT NULL,
-                        ts_code TEXT NOT NULL,
-                        name TEXT,
-                        close NUMERIC,
-                        pct_change NUMERIC,
-                        turnover_rate NUMERIC,
-                        amount NUMERIC,
-                        l_sell NUMERIC,
-                        l_buy NUMERIC,
-                        l_amount NUMERIC,
-                        net_amount NUMERIC,
-                        net_rate NUMERIC,
-                        amount_rate NUMERIC,
-                        float_values NUMERIC,
-                        reason TEXT,
-                        PRIMARY KEY (trade_date, ts_code, reason)
-                    );
-                """
-                    )
-                )
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('top_list', 'trade_date', if_not_exists => TRUE);"
-                    )
-                )
-
-                # 【V2.1新增】业绩快报表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS express (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE,
-                        end_date DATE NOT NULL,
-                        revenue NUMERIC,
-                        operate_profit NUMERIC,
-                        total_profit NUMERIC,
-                        n_income NUMERIC,
-                        total_assets NUMERIC,
-                        total_hldr_eqy_exc_min_int NUMERIC,
-                        diluted_eps NUMERIC,
-                        diluted_roe NUMERIC,
-                        yoy_op NUMERIC,
-                        yoy_gr NUMERIC,
-                        yoy_net_profit NUMERIC,
-                        bps NUMERIC,
-                        perf_summary TEXT,
-                        update_flag TEXT,
-                        PRIMARY KEY (ts_code, end_date)
-                    );
-                """
-                    )
-                )
-
-                # 【V2.5新增】利润表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS financial_income (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE,
-                        f_ann_date DATE,
-                        end_date DATE NOT NULL,
-                        report_type TEXT,
-                        comp_type TEXT,
-                        basic_eps NUMERIC,
-                        diluted_eps NUMERIC,
-                        total_revenue NUMERIC,
-                        n_income NUMERIC,
-                        total_profit NUMERIC,
-                        -- 更多字段根据Tushare接口定义添加
-                        PRIMARY KEY (ts_code, end_date, report_type)
-                    );
-                """
-                    )
-                )
-
-                # 【V2.5新增】资产负债表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS financial_balancesheet (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE,
-                        f_ann_date DATE,
-                        end_date DATE NOT NULL,
-                        report_type TEXT,
-                        comp_type TEXT,
-                        total_assets NUMERIC,
-                        total_liab NUMERIC,
-                        total_hldr_eqy_inc_min_int NUMERIC,
-                        -- 更多字段根据Tushare接口定义添加
-                        PRIMARY KEY (ts_code, end_date, report_type)
-                    );
-                """
-                    )
-                )
-
-                # 【V2.5新增】现金流量表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS financial_cashflow (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE,
-                        f_ann_date DATE,
-                        end_date DATE NOT NULL,
-                        report_type TEXT,
-                        comp_type TEXT,
-                        n_cashflow_act NUMERIC,
-                        n_add_capital NUMERIC,
-                        -- 更多字段根据Tushare接口定义添加
-                        PRIMARY KEY (ts_code, end_date, report_type)
-                    );
-                """
-                    )
-                )
-
-                # 【V2.5新增】十大流通股东表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS top10_floatholders (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE,
-                        end_date DATE NOT NULL,
-                        holder_name TEXT,
-                        hold_ratio NUMERIC,
-                        hold_amount NUMERIC,
-                        -- 更多字段根据Tushare接口定义添加
-                        PRIMARY KEY (ts_code, end_date, holder_name)
-                    );
-                """
-                    )
-                )
-
-                # 【V2.2 新增】统一的财务指标主表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS financial_indicators (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE,
-                        end_date DATE NOT NULL,
-                        -- 这里只列举部分核心字段作为示例，实际字段会很多
-                        roe NUMERIC,
-                        netprofit_yoy NUMERIC,
-                        debt_to_assets NUMERIC,
-                        or_yoy NUMERIC,
-                        -- 考虑到财务指标字段繁多，未来可以采用JSONB类型存储以增加灵活性
-                        -- 但当前为保持结构清晰，仍采用列式存储
-                        PRIMARY KEY (ts_code, end_date)
-                    );
-                """
-                    )
-                )
-                # 【V2.1新增】分红送股表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS financial_dividend (
-                        ts_code TEXT NOT NULL,
-                        end_date DATE NOT NULL,
-                        ann_date DATE,
-                        div_proc TEXT,
-                        stk_div NUMERIC,
-                        stk_bo_rate NUMERIC,
-                        stk_co_rate NUMERIC,
-                        cash_div NUMERIC,
-                        cash_div_tax NUMERIC,
-                        record_date DATE,
-                        ex_date DATE,
-                        pay_date DATE,
-                        div_listdate DATE,
-                        imp_ann_date DATE,
-                        PRIMARY KEY (ts_code, end_date)
-                    );
-                """
-                    )
-                )
-                # 【V2.1新增】股票回购表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS financial_repurchase (
-                        ts_code TEXT NOT NULL,
-                        ann_date DATE NOT NULL,
-                        end_date DATE,
-                        proc TEXT,
-                        exp_date DATE,
-                        vol NUMERIC,
-                        amount NUMERIC,
-                        high_limit NUMERIC,
-                        low_limit NUMERIC,
-                        PRIMARY KEY (ts_code, ann_date)
-                    );
-                """
-                    )
-                )
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('financial_repurchase', 'ann_date', if_not_exists => TRUE);"
-                    )
-                )
-
-                # 【V2.1新增】大宗交易表
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                    CREATE TABLE IF NOT EXISTS block_trade (
-                        trade_date DATE NOT NULL,
-                        ts_code TEXT NOT NULL,
-                        price NUMERIC,
-                        vol NUMERIC,
-                        amount NUMERIC,
-                        buyer TEXT,
-                        seller TEXT,
-                        PRIMARY KEY (trade_date, ts_code, amount, buyer, seller)
-                    );
-                """
-                    )
-                )
-                connection.execute(
-                    sqlalchemy.text(
-                        "SELECT create_hypertable('block_trade', 'trade_date', if_not_exists => TRUE);"
-                    )
-                )
-
+                self._setup_timescale_extension(connection)
+                self._create_core_tables(connection)
+                self._create_additional_tables(connection)
+                
             except ProgrammingError as e:
-                print(f"数据库初始化时发生已知错误（可能已初始化），可忽略: {e}")
+                log.warning(f"数据库初始化时发生已知错误（可能已初始化），可忽略: {e}")
             except Exception as e:
-                print(f"数据库初始化失败: {e}")
-                raise e
-        print("TimescaleDB 初始化检查完成。")
+                log.error(f"数据库初始化失败: {e}")
+                raise
+        
+        log.info("TimescaleDB 初始化检查完成。")
+
+    def _setup_timescale_extension(self, connection):
+        """设置TimescaleDB扩展"""
+        log.info("  检查TimescaleDB扩展...")
+        try:
+            connection.execute(
+                sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS timescaledb;")
+            )
+            log.info("  ✓ TimescaleDB扩展已启用")
+            return True
+        except Exception as e:
+            log.error(f"  ✗ TimescaleDB扩展启用失败: {e}")
+            log.warning("  将使用普通PostgreSQL表结构继续...")
+            return False
+
+    def _create_table_with_hypertable(self, connection, table_config):
+        """创建表并可选地转换为Hypertable"""
+        table_name = table_config["name"]
+        log.info(f"  创建表: {table_name}")
+        
+        try:
+            connection.execute(sqlalchemy.text(table_config["sql"]))
+            log.info(f"  ✓ 表 {table_name} 创建成功")
+            
+            if table_config.get("is_hypertable", False):
+                self._create_hypertable(connection, table_name, table_config.get("time_column", "trade_date"))
+                
+        except Exception as e:
+            log.error(f"  ✗ 表 {table_name} 创建失败: {e}")
+            raise
+
+    def _create_hypertable(self, connection, table_name, time_column):
+        """将表转换为Hypertable"""
+        try:
+            connection.execute(
+                sqlalchemy.text(
+                    f"SELECT create_hypertable('{table_name}', '{time_column}', if_not_exists => TRUE);"
+                )
+            )
+            log.info(f"  ✓ {table_name} 已转换为Hypertable")
+        except Exception as e:
+            log.warning(f"  ⚠ {table_name} Hypertable转换失败，使用普通表: {e}")
+
+    def _get_core_table_definitions(self):
+        """获取核心表定义"""
+        return [
+            {
+                "name": "ts_daily",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS ts_daily (
+                    trade_date DATE NOT NULL,
+                    ts_code TEXT NOT NULL,
+                    open NUMERIC,
+                    high NUMERIC,
+                    low NUMERIC,
+                    close NUMERIC,
+                    pre_close NUMERIC,
+                    "change" NUMERIC,
+                    pct_chg NUMERIC,
+                    vol BIGINT,
+                    amount NUMERIC,
+                    PRIMARY KEY (trade_date, ts_code)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "trade_date"
+            },
+            {
+                "name": "stock_basic",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS stock_basic (
+                    ts_code TEXT PRIMARY KEY,
+                    symbol TEXT,
+                    name TEXT,
+                    area TEXT,
+                    industry TEXT,
+                    market TEXT,
+                    list_date DATE,
+                    list_status TEXT,
+                    is_hs TEXT
+                );
+                """,
+                "is_hypertable": False
+            }
+        ]
+
+    def _create_core_tables(self, connection):
+        """创建核心表结构"""
+        log.info("  创建核心表结构...")
+        for table_config in self._get_core_table_definitions():
+            self._create_table_with_hypertable(connection, table_config)
+
+    def _create_additional_tables(self, connection):
+        """创建其他业务表"""
+        log.info("  创建其他业务表...")
+        
+        additional_tables = self._get_additional_table_definitions()
+        for table_config in additional_tables:
+            self._create_table_with_hypertable(connection, table_config)
+
+    def _get_additional_table_definitions(self):
+        """获取其他业务表定义"""
+        return [
+            {
+                "name": "ts_adj_factor",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS ts_adj_factor (
+                    trade_date DATE NOT NULL,
+                    ts_code TEXT NOT NULL,
+                    adj_factor NUMERIC,
+                    PRIMARY KEY (trade_date, ts_code)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "trade_date"
+            },
+            {
+                "name": "text_corpus",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS text_corpus (
+                    publish_date DATE NOT NULL,
+                    content_hash VARCHAR(64) NOT NULL,
+                    ts_code TEXT,
+                    title TEXT,
+                    source VARCHAR(255),
+                    content TEXT,
+                    PRIMARY KEY (publish_date, content_hash)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "publish_date"
+            },
+            {
+                "name": "factors_exposure",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS factors_exposure (
+                    trade_date DATE NOT NULL,
+                    ts_code TEXT NOT NULL,
+                    factor_name VARCHAR(50) NOT NULL,
+                    factor_value NUMERIC,
+                    PRIMARY KEY (trade_date, ts_code, factor_name)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "trade_date"
+            },
+            {
+                "name": "ai_reports",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS ai_reports (
+                    trade_date DATE NOT NULL,
+                    ts_code TEXT NOT NULL,
+                    report_content TEXT,
+                    model_used VARCHAR(50),
+                    estimated_cost NUMERIC,
+                    PRIMARY KEY (trade_date, ts_code)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "trade_date"
+            },
+            {
+                "name": "stk_holdernumber",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS stk_holdernumber (
+                    ts_code TEXT NOT NULL,
+                    ann_date DATE,
+                    end_date DATE NOT NULL,
+                    holder_num BIGINT,
+                    PRIMARY KEY (ts_code, end_date)
+                );
+                """,
+                "is_hypertable": False
+            },
+            {
+                "name": "stk_holdertrade",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS stk_holdertrade (
+                    ann_date DATE NOT NULL,
+                    ts_code TEXT NOT NULL,
+                    holder_name TEXT,
+                    holder_type TEXT,
+                    in_de TEXT,
+                    change_vol NUMERIC,
+                    change_ratio NUMERIC,
+                    after_share NUMERIC,
+                    after_ratio NUMERIC,
+                    avg_price NUMERIC,
+                    total_share NUMERIC,
+                    PRIMARY KEY (ann_date, ts_code, holder_name, change_vol)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "ann_date"
+            },
+            {
+                "name": "top_list",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS top_list (
+                    trade_date DATE NOT NULL,
+                    ts_code TEXT NOT NULL,
+                    name TEXT,
+                    close NUMERIC,
+                    pct_change NUMERIC,
+                    turnover_rate NUMERIC,
+                    amount NUMERIC,
+                    l_sell NUMERIC,
+                    l_buy NUMERIC,
+                    l_amount NUMERIC,
+                    net_amount NUMERIC,
+                    net_rate NUMERIC,
+                    amount_rate NUMERIC,
+                    float_values NUMERIC,
+                    reason TEXT,
+                    PRIMARY KEY (trade_date, ts_code, reason)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "trade_date"
+            },
+            {
+                "name": "express",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS express (
+                    ts_code TEXT NOT NULL,
+                    ann_date DATE,
+                    end_date DATE NOT NULL,
+                    revenue NUMERIC,
+                    operate_profit NUMERIC,
+                    total_profit NUMERIC,
+                    n_income NUMERIC,
+                    total_assets NUMERIC,
+                    total_hldr_eqy_exc_min_int NUMERIC,
+                    diluted_eps NUMERIC,
+                    diluted_roe NUMERIC,
+                    yoy_op NUMERIC,
+                    yoy_gr NUMERIC,
+                    yoy_net_profit NUMERIC,
+                    bps NUMERIC,
+                    perf_summary TEXT,
+                    update_flag TEXT,
+                    PRIMARY KEY (ts_code, end_date)
+                );
+                """,
+                "is_hypertable": False
+            },
+            {
+                "name": "financial_income",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS financial_income (
+                    ts_code TEXT NOT NULL,
+                    ann_date DATE,
+                    f_ann_date DATE,
+                    end_date DATE NOT NULL,
+                    report_type TEXT,
+                    comp_type TEXT,
+                    basic_eps NUMERIC,
+                    diluted_eps NUMERIC,
+                    total_revenue NUMERIC,
+                    n_income NUMERIC,
+                    total_profit NUMERIC,
+                    PRIMARY KEY (ts_code, end_date, report_type)
+                );
+                """,
+                "is_hypertable": False
+            },
+            {
+                "name": "financial_balancesheet",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS financial_balancesheet (
+                    ts_code TEXT NOT NULL,
+                    ann_date DATE,
+                    f_ann_date DATE,
+                    end_date DATE NOT NULL,
+                    report_type TEXT,
+                    comp_type TEXT,
+                    total_assets NUMERIC,
+                    total_liab NUMERIC,
+                    total_hldr_eqy_inc_min_int NUMERIC,
+                    PRIMARY KEY (ts_code, end_date, report_type)
+                );
+                """,
+                "is_hypertable": False
+            },
+            {
+                "name": "financial_cashflow",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS financial_cashflow (
+                    ts_code TEXT NOT NULL,
+                    ann_date DATE,
+                    f_ann_date DATE,
+                    end_date DATE NOT NULL,
+                    report_type TEXT,
+                    comp_type TEXT,
+                    n_cashflow_act NUMERIC,
+                    n_add_capital NUMERIC,
+                    PRIMARY KEY (ts_code, end_date, report_type)
+                );
+                """,
+                "is_hypertable": False
+            },
+            {
+                "name": "top10_floatholders",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS top10_floatholders (
+                    ts_code TEXT NOT NULL,
+                    ann_date DATE,
+                    end_date DATE NOT NULL,
+                    holder_name TEXT,
+                    hold_ratio NUMERIC,
+                    hold_amount NUMERIC,
+                    PRIMARY KEY (ts_code, end_date, holder_name)
+                );
+                """,
+                "is_hypertable": False
+            },
+            {
+                "name": "financial_indicators",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS financial_indicators (
+                    ts_code TEXT NOT NULL,
+                    ann_date DATE,
+                    end_date DATE NOT NULL,
+                    roe NUMERIC,
+                    netprofit_yoy NUMERIC,
+                    debt_to_assets NUMERIC,
+                    or_yoy NUMERIC,
+                    PRIMARY KEY (ts_code, end_date)
+                );
+                """,
+                "is_hypertable": False
+            },
+            {
+                "name": "financial_dividend",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS financial_dividend (
+                    ts_code TEXT NOT NULL,
+                    end_date DATE NOT NULL,
+                    ann_date DATE,
+                    div_proc TEXT,
+                    stk_div NUMERIC,
+                    stk_bo_rate NUMERIC,
+                    stk_co_rate NUMERIC,
+                    cash_div NUMERIC,
+                    cash_div_tax NUMERIC,
+                    record_date DATE,
+                    ex_date DATE,
+                    pay_date DATE,
+                    div_listdate DATE,
+                    imp_ann_date DATE,
+                    PRIMARY KEY (ts_code, end_date)
+                );
+                """,
+                "is_hypertable": False
+            },
+            {
+                "name": "financial_repurchase",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS financial_repurchase (
+                    ts_code TEXT NOT NULL,
+                    ann_date DATE NOT NULL,
+                    end_date DATE,
+                    proc TEXT,
+                    exp_date DATE,
+                    vol NUMERIC,
+                    amount NUMERIC,
+                    high_limit NUMERIC,
+                    low_limit NUMERIC,
+                    PRIMARY KEY (ts_code, ann_date)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "ann_date"
+            },
+            {
+                "name": "block_trade",
+                "sql": """
+                CREATE TABLE IF NOT EXISTS block_trade (
+                    trade_date DATE NOT NULL,
+                    ts_code TEXT NOT NULL,
+                    price NUMERIC,
+                    vol NUMERIC,
+                    amount NUMERIC,
+                    buyer TEXT,
+                    seller TEXT,
+                    PRIMARY KEY (trade_date, ts_code, amount, buyer, seller)
+                );
+                """,
+                "is_hypertable": True,
+                "time_column": "trade_date"
+            }
+        ]
 
     @property
     def conn(self):
@@ -567,13 +574,20 @@ class DataManager:
             try:
                 if table_exists:
                     with self.engine.connect() as connection:
+                        # 【V2.9.1 修正】为 stock_basic 表增加特殊处理，避免因缺少日期列而报错
+                        if table_name == "stock_basic":
+                            df = pd.read_sql(f"SELECT * FROM {table_name}", connection)
+                            if not df.empty:
+                                log.info(f"数据表 '{table_name}' 已存在，直接从数据库返回。如需更新请使用 force_update=True。")
+                                return df
+
                         # 尝试获取最新一条数据的时间戳
                         query_latest = sqlalchemy.text(f"SELECT MAX(trade_date) FROM {table_name}")
-                        if table_name == "macro_cn_gdp": # GDP表没有trade_date，用quarter
+                        if table_name == "macro_cn_gdp":  # GDP表没有trade_date，用quarter
                             query_latest = sqlalchemy.text(f"SELECT MAX(quarter) FROM {table_name}")
-                        elif table_name in ["macro_cn_m", "macro_cn_cpi", "macro_cn_pmi"]:# 月度数据
+                        elif table_name in ["macro_cn_m", "macro_cn_cpi", "macro_cn_pmi"]:  # 月度数据
                             query_latest = sqlalchemy.text(f"SELECT MAX(month) FROM {table_name}")
-                        
+
                         latest_date_in_db = connection.execute(query_latest).scalar_one_or_none()
 
                     if latest_date_in_db:
@@ -1715,8 +1729,10 @@ class DataManager:
         if self.session and not self.session.closed:
             await self.session.close()
 
-    async def _fetch_async(self, api_name: str, **kwargs) -> pd.DataFrame:
-        """核心的异步数据获取方法"""
+    async def _fetch_async(
+        self, api_name: str, max_retries: int = 3, **kwargs
+    ) -> pd.DataFrame:
+        """【V2.7 增强版】核心的异步数据获取方法，增加了重试与指数退避机制。"""
         session = await self._get_async_session()
         payload = {
             "api_name": api_name,
@@ -1725,26 +1741,62 @@ class DataManager:
             "fields": [],
         }
 
-        async with self.semaphore:
-            await asyncio.sleep(self.request_delay)
-            try:
-                async with session.post(
-                    self._API_URL, data=json.dumps(payload)
-                ) as response:
-                    response.raise_for_status()
-                    resp_json = await response.json()
+        # --- 新增重试逻辑 ---
+        for attempt in range(max_retries + 1):
+            async with self.semaphore:
+                # 在首次尝试前不延迟，在重试前延迟
+                if attempt > 0:
+                    # 指数退避策略: 1s, 2s, 4s...
+                    sleep_time = 2**attempt
+                    log.warning(
+                        f"  > API '{api_name}' 请求失败 (参数: {kwargs}), 第 {attempt}/{max_retries} 次重试，等待 {sleep_time} 秒..."
+                    )
+                    await asyncio.sleep(sleep_time)
+                else:
+                    await asyncio.sleep(self.request_delay)
 
-                    if resp_json["code"] != 0:
-                        raise ConnectionError(f"Tushare API Error: {resp_json['msg']}")
+                try:
+                    async with session.post(
+                        self._API_URL, data=json.dumps(payload), timeout=60
+                    ) as response:
+                        response.raise_for_status()
+                        resp_json = await response.json()
 
-                    data = resp_json["data"]
-                    columns = data["fields"]
-                    items = data["items"]
+                        if resp_json["code"] != 0:
+                            # Tushare 返回了业务错误，这种错误通常重试也无效，直接抛出
+                            raise ConnectionError(
+                                f"Tushare API Error: {resp_json['msg']}"
+                            )
 
-                    return pd.DataFrame(items, columns=columns)
-            except aiohttp.ClientError as e:
-                print(f"Async request for {api_name} failed: {e}")
-                return pd.DataFrame()
+                        data = resp_json["data"]
+                        columns = data["fields"]
+                        items = data["items"]
+                        return pd.DataFrame(items, columns=columns)
+
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    # 捕获网络层错误 (如 Server disconnected) 或超时错误，这些适合重试
+                    log.debug(f"  > 捕获到网络或超时错误: {e}")
+                    if attempt == max_retries:
+                        log.error(
+                            f"  > API '{api_name}' (参数: {kwargs}) 在尝试 {max_retries} 次后彻底失败。"
+                        )
+                        return pd.DataFrame()  # 返回空DataFrame表示失败
+                    continue  # 继续下一次重试
+
+                except ConnectionError as e:
+                    # 捕获Tushare业务逻辑错误，直接失败
+                    log.error(f"  > Tushare业务逻辑错误: {e}")
+                    return pd.DataFrame()
+
+                except Exception as e:
+                    # 捕获其他未知异常
+                    log.error(
+                        f"  > API '{api_name}' (参数: {kwargs}) 发生未知严重错误: {e}",
+                        exc_info=True,
+                    )
+                    return pd.DataFrame()
+        # --- 重试逻辑结束 ---
+        return pd.DataFrame()  # 如果循环结束仍未成功，返回空
 
     async def _batch_get_daily_async(
         self, ts_codes: list, start_date: str, end_date: str

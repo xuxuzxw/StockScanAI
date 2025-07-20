@@ -16,6 +16,7 @@ from sqlalchemy import text
 import data
 import quant_engine
 from logger_config import log
+from progress_tracker import ProgressTracker
 
 # 【V2.2 重构】将因子列表的定义移入此统一管道脚本中，移除对旧文件的依赖
 FACTORS_TO_CALCULATE = [
@@ -39,33 +40,60 @@ FACTORS_TO_CALCULATE = [
 def extract_data(trade_date: str) -> dict:
     """
     步骤一：执行所有耗时的数据抽取和预处理工作。
-    【V2.6 最终加固版 - 完整性校验】
+    【V2.7 增强版 - 增加进度显示】
     """
-    log.info(f"【数据抽取】开始为 {trade_date} 抽取全市场原始数据...")
+    log.info("=" * 60)
+    log.info(f"📊 开始为 {trade_date} 抽取全市场原始数据")
+    log.info("=" * 60)
 
     dm = data.DataManager()
     stock_list = dm.get_stock_basic()
     ts_codes = stock_list["ts_code"].tolist()
+    
+    log.info(f"🎯 目标股票数量: {len(ts_codes)} 只")
 
     # --- 1. 批量获取截面数据 ---
-    log.info("  正在获取当日截面数据 (指标、资金流、榜单)...")
-    daily_basics_df = dm.pro.daily_basic(trade_date=trade_date)
-    money_flow_df = dm.pro.moneyflow(trade_date=trade_date)
-    top_list_df = dm.pro.top_list(trade_date=trade_date)
-    block_trade_df = dm.pro.block_trade(trade_date=trade_date)
+    log.info("📈 获取当日截面数据...")
+    
+    data_sources = [
+        ("基本指标", lambda: dm.pro.daily_basic(trade_date=trade_date)),
+        ("资金流向", lambda: dm.pro.moneyflow(trade_date=trade_date)),
+        ("龙虎榜", lambda: dm.pro.top_list(trade_date=trade_date)),
+        ("大宗交易", lambda: dm.pro.block_trade(trade_date=trade_date))
+    ]
+    
+    results = {}
+    for name, func in data_sources:
+        try:
+            log.info(f"  📊 获取{name}数据...")
+            data = func()
+            results[name] = data
+            count = len(data) if data is not None and not data.empty else 0
+            log.info(f"  ✅ {name}: {count} 条记录")
+        except Exception as e:
+            log.warning(f"  ⚠️  {name}获取失败: {e}")
+            results[name] = pd.DataFrame()
+    
+    daily_basics_df = results.get("基本指标", pd.DataFrame())
+    money_flow_df = results.get("资金流向", pd.DataFrame())
+    top_list_df = results.get("龙虎榜", pd.DataFrame())
+    block_trade_df = results.get("大宗交易", pd.DataFrame())
 
     # --- 2. 【缓存优先】获取时序价格数据 ---
     log.info("  开始获取各股票的历史价格 (缓存优先)...")
     start_date_lookback = (pd.to_datetime(trade_date) - timedelta(days=90)).strftime("%Y%m%d")
     prices_dict = {}
 
-    # 步骤 A: 检查数据库缓存
+# 步骤 A: 检查数据库缓存
     try:
         min_trading_days = 55
+        # V3.1 终极健壮性修复：在SQL查询中明确进行日期类型转换，彻底解决缓存检查失效问题
         query = text("""
             SELECT ts_code FROM ts_daily
-            WHERE trade_date BETWEEN :start_date AND :end_date AND ts_code = ANY(:ts_codes)
-            GROUP BY ts_code HAVING COUNT(trade_date) >= :min_days
+            WHERE trade_date BETWEEN TO_DATE(:start_date, 'YYYYMMDD') AND TO_DATE(:end_date, 'YYYYMMDD') 
+              AND ts_code = ANY(:ts_codes)
+            GROUP BY ts_code 
+            HAVING COUNT(trade_date) >= :min_days
         """)
         with dm.engine.connect() as conn:
             cached_stocks_result = conn.execute(query, {
@@ -85,9 +113,16 @@ def extract_data(trade_date: str) -> dict:
         
         # --- 【新增】完整性校验与重试逻辑 ---
         downloaded_data_raw = {}
-        max_retries = 1
+        max_retries = 3  # V2.9 提升健壮性：增加上层重试次数
         for attempt in range(max_retries + 1):
-            needed = [code for code in stocks_to_download if code not in downloaded_data_raw]
+            # V2.9 修正：每次重试时，都需要重新计算还需要下载的列表
+            needed = [
+                code
+                for code in stocks_to_download
+                if code not in downloaded_data_raw
+                or downloaded_data_raw[code] is None
+                or downloaded_data_raw[code].empty
+            ]
             if not needed:
                 break
             
@@ -97,6 +132,7 @@ def extract_data(trade_date: str) -> dict:
             chunk_size = 150
             for i in range(0, len(needed), chunk_size):
                 chunk = needed[i : i + chunk_size]
+                log.info(f"      正在下载块 {i//chunk_size + 1}/{len(needed)//chunk_size + 1} (股票 {i+1}-{i+len(chunk)})...")
                 chunk_results = dm.run_batch_download(chunk, start_date_lookback, trade_date)
                 downloaded_data_raw.update(chunk_results)
             

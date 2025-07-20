@@ -110,9 +110,40 @@ V2.0 的目标是在 V1.0 的基础上，建立更完整、更强大的“宏观
 
 ## 使用说明
 
+### 🧪 快速测试 (推荐首次使用)
+
+在正式使用前，强烈建议先运行快速测试来验证系统功能：
+
+```bash
+# 方法1: 使用批处理文件 (Windows)
+快速测试.bat
+
+# 方法2: 使用Python脚本
+python run_tests.py
+
+# 方法3: 运行单个测试
+python test_core_functions.py      # 核心功能测试
+python test_factor_mini.py         # 因子计算测试
+python database_health_checker.py  # 数据库健康检查
+```
+
+### 📋 测试说明
+
+- **test_core_functions.py**: 测试最基础的连接、获取、计算、存储功能
+- **test_factor_mini.py**: 专门测试因子计算和数据库存储
+- **test_pipeline_mini.py**: 端到端测试完整的数据处理流程
+- **database_health_checker.py**: 检查数据库连接和基础设施
+- **data_validator.py**: 验证现有数据的完整性和质量
+
+### 🚀 正式部署
+
 1.  **首次初始化数据库**:
     在第一次部署或需要重建数据时，运行此脚本。它将下载A股基本信息并为核心指数预加载历史数据。
     ```bash
+    # 推荐使用一键初始化脚本
+    一键初始化全部数据.bat
+    
+    # 或手动运行
     python initialize_database.py
     ```
 
@@ -134,13 +165,11 @@ V2.0 的目标是在 V1.0 的基础上，建立更完整、更强大的“宏观
     python backfill_data.py --start 20220101 --end 20231231
     ```
 
-5.  **运行单元测试**:
+5.  **系统监控和维护**:
     ```bash
-    python test_data_pipeline.py
-    python test_quant_engine.py
-    python test_workflow.py
-    # V2.0 新增
-    python test_analyzers.py
+    python system_monitor.py          # 系统状态检查
+    python data_validator.py          # 数据质量验证
+    python run_system_check.py        # 全面系统检查
     ```
 
 ## V3.0 展望

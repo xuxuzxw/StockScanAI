@@ -325,8 +325,8 @@ def full_analysis_workflow(
     # --- 2. 实时分析流程 ---
     latest_date_dt = datetime.strptime(end_date, "%Y%m%d")
     try:
-        momentum = factor_factory.calc_momentum(ts_code, start_date, end_date)
-        volatility = factor_factory.calc_volatility(ts_code, start_date, end_date)
+        momentum = factor_factory.calc_momentum(ts_code, start_date, end_date, window=20)
+        volatility = factor_factory.calc_volatility(ts_code, start_date, end_date, window=20)
         net_inflow = factor_factory.calc_net_inflow_ratio(ts_code, start_date, end_date)
         north_hold = factor_factory.calc_north_hold_change(
             ts_code, start_date, end_date

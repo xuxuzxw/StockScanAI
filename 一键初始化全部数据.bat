@@ -19,38 +19,80 @@ pause > nul
 
 :STEP_1
 echo.
-echo --- [步骤 1/3] 初始化数据库与基础数据 (initialize_database.py)...
-echo    此步骤将创建所有必要的数据库表，并为核心指数预加载少量历史数据。
-python initialize_database.py
+echo --- [步骤 1/4] 数据库健康检查 (database_health_checker.py)...
+echo    此步骤将检查数据库连接和基础设施是否正常。
+python database_health_checker.py
 if %errorlevel% neq 0 (
     echo.
-    echo    错误: 数据库初始化失败！请检查 .env 文件中的数据库配置和网络连接。
+    echo    错误: 数据库健康检查失败！请检查 .env 文件中的数据库配置。
     goto:END
 )
-echo --- [步骤 1/3] 完成 ---
+echo --- [步骤 1/4] 完成 ---
 echo.
 
 :STEP_2
 echo.
-echo --- [步骤 2/3] 运行数据管道，计算最新交易日的因子 (run_daily_pipeline.py)...
-echo    此步骤将下载全市场最新的行情，并计算所有因子，为平台提供即时可用的数据。
-echo    由于涉及全市场数据，此步骤可能需要较长时间，请耐心等待...
+echo --- [步骤 2/4] 初始化数据库与基础数据 (initialize_database.py)...
+echo    此步骤将创建所有必要的数据库表，并为核心指数预加载少量历史数据。
+python initialize_database.py
+if %errorlevel% neq 0 (
+    echo.
+    echo    错误: 数据库初始化失败！请检查网络连接和Tushare Token。
+    goto:END
+)
+echo --- [步骤 2/4] 完成 ---
+echo.
+
+:STEP_3
+echo.
+echo --- [步骤 3/4] 安全回填基础历史数据 (backfill_data.py)...
+echo    此步骤将为全市场股票补全过去一年的历史行情数据。
+echo    该过程支持断点续传，如果意外中断，重新运行此脚本即可从断点恢复。
+echo    根据网络情况，此步骤可能需要20-60分钟，请耐心等待...
+python backfill_data.py --start 20230601 --end 20250720
+if %errorlevel% neq 0 (
+    echo.
+    echo    错误: 历史数据回填失败！请检查网络连接。
+    goto:END
+)
+echo --- [步骤 3/4] 完成 ---
+echo.
+
+:STEP_4
+echo.
+echo --- [步骤 4/4] 计算最新交易日的因子 (run_daily_pipeline.py)...
+echo    此步骤将基于已有的历史数据，快速计算所有因子，为平台提供即时可用的数据。
 python run_daily_pipeline.py
 if %errorlevel% neq 0 (
     echo.
     echo    错误: 每日数据管道执行失败！请检查 Tushare Token 和网络连接。
     goto:END
 )
-echo --- [步骤 2/3] 完成 ---
+echo --- [步骤 4/4] 完成 ---
 echo.
 
-:STEP_3
+:STEP_5
+echo.
+echo --- [最终验证] 数据质量检查 (data_validator.py)...
+echo    此步骤将验证所有数据的完整性和质量。
+python data_validator.py
+if %errorlevel% neq 0 (
+    echo.
+    echo    警告: 数据质量检查发现问题，但不影响基本使用。
+)
 echo.
 echo =================================================================
 echo.
-echo      核心服务初始化成功！
+echo      🎉 核心服务初始化成功！
 echo.
-echo      您现在已经可以启动平台前端 `streamlit run app.py` 进行使用了。
+echo      ✅ 数据库已就绪
+echo      ✅ 基础数据已加载  
+echo      ✅ 历史数据已回填
+echo      ✅ 因子数据已计算
+echo      ✅ 数据质量已验证
+echo.
+echo      您现在可以启动平台前端了:
+echo      streamlit run app.py
 echo.
 echo =================================================================
 echo.

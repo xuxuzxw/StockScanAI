@@ -122,7 +122,7 @@ SMTP_CONFIG = {
 # value: 每分钟允许的调用次数
 API_RATE_LIMITS = {
     # --- 特殊限制接口 (100次/分 * 0.9) ---
-    "holder_number": 300,
+    "holder_number": 150,
     # --- 标准限制接口 (500次/分 * 0.9) ---
     "default": 180,  # 为所有未明确列出的接口设置默认安全速率
     "daily": 450,
