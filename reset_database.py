@@ -46,8 +46,8 @@ def reset_and_initialize_database():
                         )
                     log.info("所有旧表已成功删除。")
 
-    except Exception as e:
-        log.error(f"连接或清空数据库时发生错误: {e}", exc_info=True)
+    except Exception:
+        log.error("连接或清空数据库时发生错误", exc_info=True)
         # 如果清空失败，则终止后续操作
         return
 
@@ -56,7 +56,7 @@ def reset_and_initialize_database():
     try:
         initialize_database.initialize_all_data()
         log.info("数据库已成功重置并初始化！")
-    except Exception as e:
+    except Exception:
         log.critical("在重新初始化数据库过程中发生严重错误！", exc_info=True)
 
     log.info("===== 数据库重置任务完成 =====")

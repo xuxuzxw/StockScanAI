@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import lru_cache
@@ -1796,7 +1795,7 @@ class RiskManager:
 
         probabilities = self.model.predict_proba(X_pred)[:, 1]
         prob_series = pd.Series(probabilities, index=X_pred.index)
-
+        top_n = 20
         return prob_series.nlargest(top_n).index
 
 
@@ -2673,12 +2672,8 @@ class LSTMAlphaStrategy:
         优化点：将scaler的使用本地化，避免类级别的状态污染。
         """
         # _prepare_lstm_data 现在应该返回 X_pred 和 它所使用的 scaler
-        X_pred_data = self._prepare_lstm_data(ts_code, end_date)
-        if X_pred_data is None:
-            return np.nan
-
-        X_pred, local_scaler = X_pred_data  # 解包
-        if X_pred is None:
+        X_pred, local_scaler = self._prepare_lstm_data(ts_code, end_date)
+        if X_pred is None or local_scaler is None:
             return np.nan
 
         # 假设模型已加载并可进行预测
@@ -2687,37 +2682,16 @@ class LSTMAlphaStrategy:
         predicted_scaled_price = X_pred[0, -1, 0] * (1 + np.random.randn() * 0.05)
 
         # 反归一化得到预测的价格
-        current_price = local_scaler.inverse_transform(
-            np.array([[X_pred[0, -1, 0], 0]])
-        )[0, 0]
-        predicted_price = local_scaler.inverse_transform(
-            np.array([[predicted_scaled_price, 0]])
-        )[0, 0]
+        current_price_scaled = np.array([[X_pred[0, -1, 0], 0]])
+        current_price = local_scaler.inverse_transform(current_price_scaled)[0, 0]
+
+        predicted_price_scaled = np.array([[predicted_scaled_price, 0]])
+        predicted_price = local_scaler.inverse_transform(predicted_price_scaled)[0, 0]
+
+        if current_price == 0:
+            return np.nan
 
         return (predicted_price / current_price) - 1
-
-    # 同时需要修改 _prepare_lstm_data 以返回 scaler
-    def _prepare_lstm_data(
-        self, ts_code: str, end_date: str
-    ) -> tuple[np.ndarray, any] | None:
-        """为单只股票准备LSTM模型的输入数据 (X)"""
-        from sklearn.preprocessing import MinMaxScaler
-
-        start_date = (
-            pd.to_datetime(end_date) - pd.Timedelta(days=self.lookback_window * 2)
-        ).strftime("%Y%m%d")
-        df = self.dm.get_adjusted_daily(ts_code, start_date, end_date, adj="hfq")
-
-        if df is None or len(df) < self.lookback_window:
-            return None, None
-
-        features = df[["close", "vol"]].tail(self.lookback_window)
-
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_features = scaler.fit_transform(features)
-
-        # 塑造成LSTM需要的 [samples, timesteps, features] 形状
-        return np.array([scaled_features]), scaler
 
 
 if __name__ == "__main__":

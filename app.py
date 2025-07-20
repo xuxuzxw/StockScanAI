@@ -655,7 +655,8 @@ if tab_ranker:
             # --- 2. 用户选择因子与权重 ---
             st.markdown("#### (1) 配置您的多因子模型")
             # 【V2.2 重构】从统一的数据管道脚本中导入因子列表，确保源唯一
-            from run_daily_pipeline import FACTORS_TO_CALCULATE as available_factors
+            from run_daily_pipeline import FACTORS_TO_CALCULATE
+            available_factors = FACTORS_TO_CALCULATE
 
             cols = st.columns(4)
             factor_direction = {
@@ -1921,9 +1922,7 @@ if tab_backtest:
                     try:
                         # --- 1. 数据准备 ---
                         st.info("步骤1: 准备股票池和价格数据...")
-                        stock_pool = get_stock_list()["ts_code"].tolist()[
-                            :100
-                        ]  # 缩小范围以提高速度
+                        stock_pool = get_stock_list()["ts_code"].tolist()[:100]  # 缩小范围以提高速度
                         bt_start_str = bt_start_date.strftime("%Y%m%d")
                         bt_end_str = bt_end_date.strftime("%Y%m%d")
 

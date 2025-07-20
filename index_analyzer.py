@@ -1,9 +1,7 @@
 # quant_project/index_analyzer.py
-import numpy as np
 import pandas as pd
 
 import data
-from logger_config import log
 
 
 class IndexAnalyzer:

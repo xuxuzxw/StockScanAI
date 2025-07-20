@@ -1,8 +1,5 @@
 # quant_project/backfill_data.py
 import argparse
-from datetime import datetime
-
-import pandas as pd
 
 import config
 import data
@@ -41,7 +38,7 @@ def backfill_data(
             #     dm.get_fina_indicator(ts_code=code, force_update=True)
 
             if (i + 1) % 100 == 0:
-                log.info(f"处理进度: {i+1}/{total}")
+                log.info(f"处理进度: {i + 1}/{total}")
 
         except Exception as e:
             log.error(f"处理 {code} 时发生错误: {e}")

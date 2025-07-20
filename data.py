@@ -1,9 +1,8 @@
 # quant_project/data.py
 import asyncio
 import json
-import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import lru_cache, wraps
 
 import aiohttp
@@ -82,8 +81,8 @@ class DataManager:
         self,
         token=config.TUSHARE_TOKEN,
         db_url=config.DATABASE_URL,
-        concurrency_limit=8,
-        requests_per_minute=50,
+        concurrency_limit=3,
+        requests_per_minute=300,
     ):
         if not token or token == "YOUR_TUSHARE_TOKEN":
             raise ValueError("Tushare Token未在config.py中配置。")
@@ -536,7 +535,7 @@ class DataManager:
             # 使用参数化查询防止SQL注入
             query = sqlalchemy.text(
                 f"""
-                SELECT * FROM {table_name} 
+                SELECT * FROM {table_name}
                 WHERE ts_code = :ts_code AND {date_column} >= :start_date AND {date_column} <= :end_date
             """
             )
@@ -807,10 +806,6 @@ class DataManager:
         return self.pro.hk_hold(
             ts_code=ts_code, start_date=start_date, end_date=end_date
         )
-
-    @api_rate_limit("top_list")
-    def get_top_list(self, trade_date):
-        return self.pro.top_list(trade_date=trade_date)
 
     @api_rate_limit("margin_detail")
     def get_margin_detail(self, ts_code, start_date, end_date):
@@ -1386,40 +1381,10 @@ class DataManager:
                     )
                     if result.rowcount > 0:
                         log.info(
-                            f"为 {ts_code} 清理了 {result.rowcount} 份旧的AI报告。"
+                            "为 %s 清理了 %s 份旧的AI报告。", ts_code, result.rowcount
                         )
-        except Exception as e:
-            log.error(f"清理 {ts_code} 的AI报告时出错: {e}", exc_info=True)
-
-    def purge_old_ai_reports(self, ts_code: str, keep_latest: int = 10):
-        """【V2.1新增】清理指定股票的旧AI报告，仅保留最新的N份。"""
-        try:
-            with self.engine.connect() as connection:
-                with connection.begin():
-                    # 使用窗口函数和子查询来确定要删除的旧报告
-                    # 这是一个健壮的、在各种SQL方言中都有效的方法
-                    delete_sql = sqlalchemy.text(
-                        f"""
-                        DELETE FROM ai_reports
-                        WHERE ctid IN (
-                            SELECT ctid FROM (
-                                SELECT ctid, ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) as rn
-                                FROM ai_reports
-                                WHERE ts_code = :ts_code
-                            ) as sub
-                            WHERE sub.rn > :keep_latest
-                        )
-                    """
-                    )
-                    result = connection.execute(
-                        delete_sql, {"ts_code": ts_code, "keep_latest": keep_latest}
-                    )
-                    if result.rowcount > 0:
-                        log.info(
-                            f"为 {ts_code} 清理了 {result.rowcount} 份旧的AI报告。"
-                        )
-        except Exception as e:
-            log.error(f"清理 {ts_code} 的AI报告时出错: {e}", exc_info=True)
+        except Exception:
+            log.error("清理 %s 的AI报告时出错:", ts_code, exc_info=True)
 
     def __del__(self):
         """关闭数据库连接和异步会话"""
