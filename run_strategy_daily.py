@@ -157,8 +157,51 @@ def run_daily_strategy_workflow():
 
     except Exception as e:
         log.error("生成AI晨报过程中发生错误！", exc_info=True)
+    
+    # --- 6. 生成并持久化盘前交易计划 ---
+    log.info("正在生成并保存盘前交易计划...")
+    try:
+        trading_plan = generate_pre_market_plan(target_portfolio, dm.get_stock_basic())
+        plan_path = os.path.join('__pycache__', f'trading_plan_{trade_date}.json')
+        with open(plan_path, 'w', encoding='utf-8') as f:
+            json.dump(trading_plan, f, ensure_ascii=False, indent=4)
+        log.info(f"交易计划已成功保存至: {plan_path}")
+    except Exception as e:
+        log.error("生成或保存交易计划时发生错误！", exc_info=True)
+
 
     log.info("===== 每日策略自动化工作流执行完毕 =====")
+
+
+def generate_pre_market_plan(target_portfolio: pd.DataFrame, stock_basics: pd.DataFrame) -> dict:
+    """
+    【V2.4新增】根据策略输出的目标持仓，生成结构化的盘前交易计划。
+    - 实现了 "高保真决策支持" 的规划。
+    """
+    if target_portfolio is None or target_portfolio.empty:
+        return {"买入计划": [], "卖出计划": [], "持仓计划": []}
+        
+    plan = {
+        "买入计划": [],
+        "卖出计划": [], # 暂未实现，未来可与现有持仓对比生成
+        "持仓计划": []
+    }
+    
+    # 合并股票名称和行业信息
+    portfolio_df = target_portfolio.merge(stock_basics[['ts_code', 'name', 'industry']], on='ts_code')
+
+    for _, row in portfolio_df.iterrows():
+        trade_info = {
+            "股票代码": row['ts_code'],
+            "股票名称": row['name'],
+            "所属行业": row['industry'],
+            "目标权重": f"{row['weight']:.2%}",
+            "操作指令": "根据目标权重建立仓位",
+            "关注点": "关注开盘后一小时内的价格平稳性，避免追高"
+        }
+        plan["持仓计划"].append(trade_info)
+
+    return plan
 
 
 if __name__ == '__main__':

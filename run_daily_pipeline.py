@@ -55,9 +55,18 @@ def extract_data(trade_date: str) -> dict:
     log.info("  开始异步并发获取各股票的历史价格...")
     start_date_lookback = (pd.to_datetime(trade_date) - timedelta(days=90)).strftime('%Y%m%d')
     
-    # 调用DataManager中已有的高性能异步下载方法
-    prices_dict_raw = dm.run_batch_download(ts_codes, start_date_lookback, trade_date)
-    
+    # 【V2.4 UX优化】将大任务拆分为小批次，并增加进度条
+    prices_dict_raw = {}
+    chunk_size = 150 # 每批次处理150只股票
+    total_stocks = len(ts_codes)
+    for i in range(0, total_stocks, chunk_size):
+        chunk = ts_codes[i:i + chunk_size]
+        chunk_results = dm.run_batch_download(chunk, start_date_lookback, trade_date)
+        prices_dict_raw.update(chunk_results)
+        
+        progress = min(i + chunk_size, total_stocks)
+        log.info(f"    价格获取进度: {progress}/{total_stocks}")
+
     # 将原始DataFrame字典转换为所需的Series字典
     prices_dict = {
         code: df.set_index('trade_date')['close']

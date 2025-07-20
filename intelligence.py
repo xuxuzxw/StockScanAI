@@ -512,3 +512,50 @@ def generate_and_send_report_workflow(
 
     _send_email(subject, html_report, config.SMTP_CONFIG)
     print(f"为 {ts_code} 生成并发送综合报告的工作流已完成。")
+
+def triggered_analysis_workflow(
+    orchestrator: "AIOrchestrator",
+    data_manager: "data.DataManager",
+    ts_code: str,
+    trigger_event: str
+) -> str:
+    """
+    【V2.4新增】由量化信号触发的轻量级、低成本AI分析工作流。
+    - 实现了 "量化信号触发式AI分析" 的规划。
+    """
+    log.info(f"接收到 {ts_code} 的触发事件: '{trigger_event}'，启动轻量级AI分析...")
+    orchestrator.reset_costs()
+
+    # 1. 根据触发事件，采集必要信息
+    # 此处为简化示例，实际应根据事件类型采集不同数据
+    df_minute = data_manager.get_minute_bars_ak(ts_code)
+    if df_minute.empty:
+        return f"无法获取 {ts_code} 的分钟线数据，分析中止。"
+        
+    latest_bar = df_minute.iloc[-1]
+    price_change_5min = (latest_bar['close'] / df_minute.iloc[-2]['close'] - 1) * 100
+    
+    context = f"""
+    股票 {ts_code} 在最新的5分钟K线上价格剧烈变动 {price_change_5min:.2f}%，
+    且成交量放大至 {latest_bar['vol']}手。
+    """
+
+    # 2. 构建针对性的、低成本的AI Prompt
+    prompt = f"""
+    作为一名盘中交易分析师，请根据以下实时异动信息，快速分析可能的原因，并给出简短的操作建议。
+
+    **异动信息:**
+    {context}
+
+    **分析要求:**
+    1.  推测可能导致该异动的原因（如：突发新闻、板块联动、大单买入/卖出）。
+    2.  给出简明扼要的应对策略（如：观察后续走势、检查相关新闻、小仓位试探）。
+    3.  回答必须简短、直接、适合盘中快速决策。
+    """
+    
+    # 3. 使用低成本模型进行分析
+    report = orchestrator._execute_ai_call(prompt, 'fast_and_cheap')
+    cost = orchestrator.get_session_costs()
+    
+    log.info(f"轻量级AI分析完成。成本: ${cost['estimated_cost']:.5f}")
+    return report

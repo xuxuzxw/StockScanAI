@@ -2084,6 +2084,95 @@ class HistoricalScorer:
         return normalized_score.rename("宏观景气分")
 
 
+class LSTMAlphaStrategy:
+    """
+    【V2.4新增】基于LSTM的时序预测策略框架。
+    - 实现了 "AI策略大脑进化" 的规划。
+    """
+    def __init__(self, data_manager: data.DataManager, lookback_window=60, prediction_horizon=5):
+        self.dm = data_manager
+        self.lookback_window = lookback_window
+        self.prediction_horizon = prediction_horizon
+        self.model = None # 此处应为一个PyTorch或TensorFlow模型实例
+        self.scaler = None # 用于数据归一化的Scaler
+
+    def _prepare_lstm_data(self, ts_code: str, end_date: str) -> np.ndarray | None:
+        """为单只股票准备LSTM模型的输入数据 (X)"""
+        from sklearn.preprocessing import MinMaxScaler
+        
+        start_date = (pd.to_datetime(end_date) - pd.Timedelta(days=self.lookback_window * 2)).strftime('%Y%m%d')
+        df = self.dm.get_adjusted_daily(ts_code, start_date, end_date, adj='hfq')
+        
+        if df is None or len(df) < self.lookback_window:
+            return None
+            
+        # 使用收盘价和成交量作为特征
+        features = df[['close', 'vol']].tail(self.lookback_window)
+        
+        # 归一化
+        self.scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_features = self.scaler.fit_transform(features)
+        
+        # 塑造成LSTM需要的 [samples, timesteps, features] 形状
+        return np.array([scaled_features])
+
+    def train(self, ts_code: str, training_data: pd.DataFrame):
+        """
+        （示意）训练LSTM模型的逻辑。
+        在实际应用中，这将是一个复杂的过程，包括构建模型、定义损失函数和优化器。
+        """
+        log.info(f"正在为 {ts_code} 训练LSTM模型... (示意流程)")
+        # 1. 数据准备 (创建 X 和 y)
+        # 2. 构建PyTorch/TensorFlow模型
+        # 3. 循环训练
+        # self.model = trained_model
+        pass
+
+    def predict_future_return(self, ts_code: str, end_date: str) -> float:
+        """
+        【V2.4优化】使用“已训练好”的LSTM模型，预测未来N天的预期收益率。
+        优化点：将scaler的使用本地化，避免类级别的状态污染。
+        """
+        # _prepare_lstm_data 现在应该返回 X_pred 和 它所使用的 scaler
+        X_pred_data = self._prepare_lstm_data(ts_code, end_date)
+        if X_pred_data is None:
+            return np.nan
+
+        X_pred, local_scaler = X_pred_data # 解包
+        if X_pred is None:
+            return np.nan
+        
+        # 假设模型已加载并可进行预测
+        # predicted_scaled_price = self.model.predict(X_pred)
+        # 此处使用一个模拟值代替真实模型预测
+        predicted_scaled_price = X_pred[0, -1, 0] * (1 + np.random.randn() * 0.05)
+        
+        # 反归一化得到预测的价格
+        current_price = local_scaler.inverse_transform(np.array([[X_pred[0, -1, 0], 0]]))[0, 0]
+        predicted_price = local_scaler.inverse_transform(np.array([[predicted_scaled_price, 0]]))[0, 0]
+
+        return (predicted_price / current_price) - 1
+
+    # 同时需要修改 _prepare_lstm_data 以返回 scaler
+    def _prepare_lstm_data(self, ts_code: str, end_date: str) -> tuple[np.ndarray, any] | None:
+        """为单只股票准备LSTM模型的输入数据 (X)"""
+        from sklearn.preprocessing import MinMaxScaler
+        
+        start_date = (pd.to_datetime(end_date) - pd.Timedelta(days=self.lookback_window * 2)).strftime('%Y%m%d')
+        df = self.dm.get_adjusted_daily(ts_code, start_date, end_date, adj='hfq')
+        
+        if df is None or len(df) < self.lookback_window:
+            return None, None
+            
+        features = df[['close', 'vol']].tail(self.lookback_window)
+        
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_features = scaler.fit_transform(features)
+        
+        # 塑造成LSTM需要的 [samples, timesteps, features] 形状
+        return np.array([scaled_features]), scaler
+
+
 if __name__ == '__main__':
     # #################################################
     # 演示【源于 main.py】的主工作流

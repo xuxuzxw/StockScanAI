@@ -234,7 +234,8 @@ except ImportError:
 # --- 创建多标签页 (V2.2 UX 优化) ---
 # V2.2 重构：明确定义所有标签页的最终理想顺序
 all_tabs_ordered = [
-    "📈 策略看板",   # V2.3 新增
+    "🧠 智能决策",   # V2.4 新增
+    "📈 策略看板",
     "🎯 市场全景",
     "🏭 行业透视",
     "🏆 智能选股排名",
@@ -245,7 +246,7 @@ all_tabs_ordered = [
     "🤖 AI综合报告",
     "🔬 因子分析器",
     "🚀 回测实验室",
-    "🔬 模型训练室", # V2.3 新增
+    "🔬 模型训练室",
     "⚙️ 系统任务"
 ]
 
@@ -274,7 +275,8 @@ else:
     tab_industry = tab_mapping.get('行业透视')
 
 # 为了代码可读性，为几个核心tab创建别名
-tab_strategy_board = tab_mapping.get('策略看板') # V2.3 新增
+tab_decision = tab_mapping.get('智能决策') # V2.4 新增
+tab_strategy_board = tab_mapping.get('策略看板')
 tab_ranker = tab_mapping.get('智能选股排名')
 tab_main = tab_mapping.get('行情总览')
 tab_funds = tab_mapping.get('资金与筹码')
@@ -283,8 +285,58 @@ tab_macro = tab_mapping.get('宏观环境')
 tab_ai = tab_mapping.get('AI综合报告')
 tab_analyzer = tab_mapping.get('因子分析器')
 tab_backtest = tab_mapping.get('回测实验室')
-tab_trainer = tab_mapping.get('模型训练室') # V2.3 新增
+tab_trainer = tab_mapping.get('模型训练室')
 tab_tasks = tab_mapping.get('系统任务')
+
+
+# --- V2.4 新增: 智能决策 ---
+if tab_decision:
+    with tab_decision:
+        st.subheader("盘前交易计划 & 盘后复盘")
+        st.markdown("基于每日自动化策略 (`run_strategy_daily.py`) 的执行结果，生成高保真实战决策支持信息。")
+
+        # 从策略看板获取最新交易日
+        try:
+            cal_df = data_manager.pro.trade_cal(exchange='', start_date=(datetime.now() - timedelta(days=5)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
+            report_date = cal_df[cal_df['is_open'] == 1]['cal_date'].max()
+        except Exception:
+            report_date = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+
+        st.info(f"当前交易计划适用日期: **{report_date}**")
+
+        # 1. 盘前交易计划
+        st.markdown("#### 盘前交易计划")
+        st.caption("此计划由后台每日策略工作流自动生成，此处仅负责读取和展示。")
+        if st.button("📈 加载/刷新今日交易计划"):
+            with st.spinner("正在加载预计算的交易计划..."):
+                try:
+                    import json
+                    import os
+                    plan_path = os.path.join('__pycache__', f'trading_plan_{report_date}.json')
+                    
+                    if os.path.exists(plan_path):
+                        with open(plan_path, 'r', encoding='utf-8') as f:
+                            trading_plan = json.load(f)
+                        st.success(f"成功从 {plan_path} 加载交易计划！")
+                        st.json(trading_plan)
+                    else:
+                        st.error(f"错误：未找到 {report_date} 的交易计划文件。请确认后台 `run_strategy_daily.py` 任务是否已成功执行。")
+
+                except Exception as e:
+                    st.error(f"加载交易计划时出错: {e}")
+        
+        st.markdown("---")
+        # 2. 盘后复盘
+        st.markdown("#### 盘后交易复盘 (TBA - 交易行为分析)")
+        st.info("此模块为V2.4规划功能，将在未来版本中实现。它将分析当日实际成交回报与预期的偏差，并对交易成本、冲击成本等进行量化归因。")
+        # 预留的UI布局
+        tba_cols = st.columns(3)
+        with tba_cols[0]:
+            st.metric("计划收益", "1.25%", "0.1%")
+        with tba_cols[1]:
+            st.metric("实际收益", "1.10%", "-0.15%")
+        with tba_cols[2]:
+            st.metric("交易成本/滑点损耗", "0.15%")
 
 
 # --- 0. 策略看板 (V2.3 新增) ---

@@ -16,7 +16,7 @@ import config
 from logger_config import log
 
 # --- 装饰器：用于缓存和API频率控制 ---
-def api_rate_limit(calls_per_minute=200):
+def api_rate_limit(calls_per_minute=400):
     """Tushare API调用频率控制装饰器"""
     min_interval = 60.0 / calls_per_minute
     last_call_time = {'value': 0}
@@ -44,7 +44,7 @@ class DataManager:
     """
     _API_URL = 'http://api.tushare.pro'
 
-    def __init__(self, token=config.TUSHARE_TOKEN, db_url=config.DATABASE_URL, concurrency_limit=4, requests_per_minute=50):
+    def __init__(self, token=config.TUSHARE_TOKEN, db_url=config.DATABASE_URL, concurrency_limit=8, requests_per_minute=50):
         if not token or token == "YOUR_TUSHARE_TOKEN":
             raise ValueError("Tushare Token未在config.py中配置。")
         self.pro = ts.pro_api(token)
@@ -488,14 +488,26 @@ class DataManager:
     @lru_cache(maxsize=128)
     def get_adjusted_daily(self, ts_code, start_date, end_date, adj='hfq'):
         """
-        【核心工具】获取复权日线行情。
+        【V2.4优化-核心工具】获取复权日线行情（支持双数据源热备）。
         自动处理日线和复权因子的合并与计算。
         :param adj: 'qfq' (前复权), 'hfq' (后复权)
         """
         df_daily = self.get_daily(ts_code, start_date, end_date)
         df_adj = self.get_adj_factor(ts_code, start_date, end_date)
         
-        if df_daily is None or df_daily.empty or df_adj is None or df_adj.empty:
+        # 主数据源Tushare获取失败时，启动备用数据源AkShare
+        if df_daily is None or df_daily.empty:
+            log.warning(f"主数据源(Tushare)未能获取 {ts_code} 的日线数据，尝试启动备用数据源(AkShare)...")
+            # AkShare自带前复权，因此直接返回，不再需要与adj_factor合并
+            df_ak = self._get_daily_ak(ts_code, start_date, end_date)
+            if df_ak is not None and not df_ak.empty:
+                log.info(f"备用数据源(AkShare)成功获取到 {ts_code} 的数据。")
+                return df_ak
+            else:
+                log.error(f"主备数据源均未能获取 {ts_code} 的日线数据。")
+                return None
+
+        if df_adj is None or df_adj.empty:
             return None
         
         # 【鲁棒性修复】确保 trade_date 列是 datetime 类型以便正确合并
@@ -831,6 +843,47 @@ class DataManager:
         """【V2.1激活】获取Shibor同业拆放利率，使用通用缓存"""
         return self._fetch_and_cache(self.pro.shibor, 'macro_shibor', force_update=force_update, start_date=start_date, end_date=end_date)
 
+    @lru_cache(maxsize=256)
+    def get_minute_bars_ak(self, ts_code: str, period: str = '5', adjust: str = "qfq") -> pd.DataFrame:
+        """【V2.4新增】使用AkShare获取分钟级别K线数据。"""
+        # ts_code格式转换为akshare格式： e.g., '600519.SH' -> 'sh600519'
+        ak_code = f"{ts_code[-2:].lower()}{ts_code[:6]}"
+        try:
+            df = ak.stock_zh_a_hist_min_em(symbol=ak_code, period=period, adjust=adjust)
+            if df is not None and not df.empty:
+                # 重命名列以适配内部标准
+                df = df.rename(columns={
+                    '时间': 'trade_time',
+                    '开盘': 'open', '收盘': 'close', '最高': 'high', '最低': 'low',
+                    '成交量': 'vol', '成交额': 'amount', '换手率': 'turnover'
+                })
+                df['trade_time'] = pd.to_datetime(df['trade_time'])
+                return df[['trade_time', 'open', 'close', 'high', 'low', 'vol', 'amount', 'turnover']]
+        except Exception as e:
+            log.warning(f"使用AkShare获取 {ts_code} 的分钟线数据失败: {e}")
+        return pd.DataFrame()
+
+    def _get_daily_ak(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame | None:
+        """【V2.4优化】使用AkShare获取日线行情作为备用数据源。"""
+        ak_code = f"{ts_code[-2:].lower()}{ts_code[:6]}"
+        start_date_ak = pd.to_datetime(start_date).strftime('%Y%m%d')
+        end_date_ak = pd.to_datetime(end_date).strftime('%Y%m%d')
+        try:
+            df = ak.stock_zh_a_hist(symbol=ak_code, start_date=start_date_ak, end_date=end_date_ak, adjust="qfq")
+            if df is not None and not df.empty:
+                # 重命名列以适配内部标准
+                df = df.rename(columns={
+                    '日期': 'trade_date', '开盘': 'open', '收盘': 'close', '最高': 'high', '最低': 'low',
+                    '成交量': 'vol', '成交额': 'amount', '涨跌幅': 'pct_chg', '换手率': 'turnover_rate'
+                })
+                df['trade_date'] = pd.to_datetime(df['trade_date'])
+                # AkShare的vol单位是股，Tushare是手，需要统一
+                df['vol'] = df['vol'] / 100
+                return df
+        except Exception as e:
+            log.warning(f"后备方案：使用AkShare获取 {ts_code} 的日线数据失败: {e}")
+        return None
+
     # --- (六) 异步数据获取模块 ---
     async def _get_async_session(self):
         """获取或创建 aiohttp Session"""
@@ -942,6 +995,30 @@ class DataManager:
         available_data.sort_values(by='end_date', ascending=False, inplace=True)
         
         return available_data.head(1)
+    
+    def purge_old_ai_reports(self, ts_code: str, keep_latest: int = 10):
+        """【V2.1新增】清理指定股票的旧AI报告，仅保留最新的N份。"""
+        try:
+            with self.engine.connect() as connection:
+                with connection.begin():
+                    # 使用窗口函数和子查询来确定要删除的旧报告
+                    # 这是一个健壮的、在各种SQL方言中都有效的方法
+                    delete_sql = sqlalchemy.text(f"""
+                        DELETE FROM ai_reports
+                        WHERE ctid IN (
+                            SELECT ctid FROM (
+                                SELECT ctid, ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) as rn
+                                FROM ai_reports
+                                WHERE ts_code = :ts_code
+                            ) as sub
+                            WHERE sub.rn > :keep_latest
+                        )
+                    """)
+                    result = connection.execute(delete_sql, {'ts_code': ts_code, 'keep_latest': keep_latest})
+                    if result.rowcount > 0:
+                        log.info(f"为 {ts_code} 清理了 {result.rowcount} 份旧的AI报告。")
+        except Exception as e:
+            log.error(f"清理 {ts_code} 的AI报告时出错: {e}", exc_info=True)
     
     def purge_old_ai_reports(self, ts_code: str, keep_latest: int = 10):
         """【V2.1新增】清理指定股票的旧AI报告，仅保留最新的N份。"""
