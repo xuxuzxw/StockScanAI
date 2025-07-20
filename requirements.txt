@@ -2,8 +2,9 @@
 
 # --- 数据接口与处理 ---
 tushare
-pandas
+pandas>=2.0.0
 numpy
+sqlalchemy
 
 # --- 前端与可视化 ---
 streamlit

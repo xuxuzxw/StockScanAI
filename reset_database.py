@@ -1,4 +1,4 @@
-# quant_project/reset_database.py
+# StockScanAI/reset_database.py
 #
 # 【警告】这是一个破坏性操作脚本。
 # 它会连接到服务器数据库，并删除其中的所有表。

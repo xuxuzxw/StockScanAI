@@ -1,4 +1,4 @@
-# quant_project/manual_api_tester.py
+# StockScanAI/manual_api_tester.py
 #
 # 【V2.6 终极完整版】A股量化投研平台 - API并发压力测试工具
 #

@@ -1,4 +1,4 @@
-# quant_project/quant_engine.py
+# StockScanAI/quant_engine.py
 # --- 这是合并后的文件，整合了 quant_engine.py, quant_engine_v2.py, 和 quant_engine_v3.py 的所有功能 ---
 
 from __future__ import annotations
@@ -1625,7 +1625,7 @@ class MLAlphaStrategy:
         self,
         all_prices: pd.DataFrame,
         all_factors_long: pd.DataFrame,
-        model_path="ml_model.pkl",
+        model_path="models/ml_model.pkl",
     ):
         """
         【V2.3 修正版】在准备好的数据上训练机器学习模型，并保存到本地。

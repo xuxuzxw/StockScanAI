@@ -1,5 +1,7 @@
+.kiro
 .venv
 __pycache__
+data
 data_cache
 pgdata
 .env

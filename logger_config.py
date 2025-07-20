@@ -12,7 +12,7 @@ def setup_logger():
     """
     配置并返回一个全局 logger。
     - INFO 及以上级别的日志会输出到控制台。
-    - DEBUG 及以上级别的日志会写入到文件 `__pycache__/quant_project.log`。
+    - DEBUG 及以上级别的日志会写入到文件 `__pycache__/StockScanAI.log`。
     """
     # 获取根 logger
     logger = logging.getLogger("QuantProject")

@@ -557,7 +557,7 @@ if tab_decision:
                     import os
 
                     plan_path = os.path.join(
-                        "__pycache__", f"trading_plan_{report_date}.json"
+                        "data", f"trading_plan_{report_date}.json"
                     )
 
                     if os.path.exists(plan_path):
@@ -2618,6 +2618,6 @@ if tab_tasks:
                         log_lines = f.readlines()
                     st.text_area("Log Preview:", "".join(log_lines[-20:]), height=300)
                 except FileNotFoundError:
-                    st.warning("⚠️ 日志文件 'quant_project.log' 未找到。")
+                    st.warning("⚠️ 日志文件 'StockScanAI.log' 未找到。")
                 except Exception as e:
                     st.error(f"❌ 读取日志文件失败: {e}")

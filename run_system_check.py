@@ -1,4 +1,4 @@
-# quant_project/run_system_check.py
+# StockScanAI/run_system_check.py
 #
 # A股量化投研平台 - 统一系统健康检查程序
 #
@@ -101,8 +101,20 @@ def run_all_checks():
         finalize_report(checks_passed, total_checks)
         return
 
+    # --- 检查 3.5: 数据库数据质量验证 ---
+    log.info("\n--- [检查 3.5/7] 数据库数据质量验证 ---")
+    try:
+        check_database_data_quality(dm)
+        log.info("  [PASS] 数据库核心数据质量验证通过。")
+        checks_passed += 1
+        total_checks += 1 # 增加一个检查总数
+    except Exception as e:
+        log.error(f"  [FAIL] 数据库数据质量验证失败: {e}", exc_info=True)
+        finalize_report(checks_passed, total_checks)
+        return
+
     # --- 检查 4: 引擎层核心功能 (FactorFactory & FactorProcessor) ---
-    log.info("\n--- [检查 4/6] 引擎层因子计算 ---")
+    log.info("\n--- [检查 4/7] 引擎层因子计算 ---")
     try:
         ff = qe.FactorFactory(_data_manager=dm)
         fp = qe.FactorProcessor(_data_manager=dm)
@@ -149,7 +161,7 @@ def run_all_checks():
         return
 
     # --- 检查 6: 端到端工作流冒烟测试 ---
-    log.info("\n--- [检查 6/6] 端到端工作流冒烟测试 ---")
+    log.info("\n--- [检查 7/7] 端到端工作流冒烟测试 ---")
     try:
         # 这是一个简化的测试，仅验证核心工作流的组件能否被正确初始化和调用
         # 而不实际运行耗时的完整流程

@@ -1,4 +1,4 @@
-# quant_project/scheduler.py
+# StockScanAI/scheduler.py
 #
 # 这是一个独立的、可长期运行的自动化任务调度器。
 # 它使用 APScheduler 库，根据预设的时间规则，自动执行数据更新、因子计算等任务。

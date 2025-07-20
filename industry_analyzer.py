@@ -1,4 +1,4 @@
-# quant_project/industry_analyzer.py
+# StockScanAI/industry_analyzer.py
 import pandas as pd
 
 import data

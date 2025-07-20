@@ -1,4 +1,4 @@
-# quant_project/run_daily_pipeline.py
+# StockScanAI/run_daily_pipeline.py
 #
 # 【V2.2 核心优化】
 # 目的：将数据抽取和因子计算两个独立的后台任务，合并为一个统一、健壮的数据管道。
@@ -203,7 +203,7 @@ def calculate_and_save_factors(trade_date: str, raw_data: dict, all_fina_data: p
     log.info("  正在基于预取数据计算：财务类因子...")
     if all_fina_data is not None and not all_fina_data.empty:
         # 对预取的所有财务数据进行一次PIT筛选
-        pit_fina_data = all_fina_data.groupby('ts_code').apply(
+        pit_fina_data = all_fina_data.groupby('ts_code', include_groups=False).apply(
             lambda x: dm.get_pit_financial_data(x, trade_date)
         ).reset_index(drop=True)
         
@@ -266,76 +266,129 @@ def calculate_and_save_factors(trade_date: str, raw_data: dict, all_fina_data: p
 def run_daily_pipeline():
     """
     执行每日数据管道的主工作流。
+    - 具备智能补漏功能，自动补齐历史缺失数据。
     """
     dm = data.DataManager()
+
+    # 1. 确定需要处理的交易日列表
+    log.info("===== 正在确定需要处理的交易日列表（包括历史补漏） =====")
     try:
+        # 获取数据库中factors_exposure表的最新日期
+        with dm.engine.connect() as connection:
+            query_max_date = text("SELECT MAX(trade_date) FROM factors_exposure")
+            last_processed_date_db = connection.execute(query_max_date).scalar_one_or_none()
+
+        # 确定开始获取交易日历的日期
+        if last_processed_date_db:
+            # 从数据库最新日期的下一天开始检查
+            start_cal_date = (pd.to_datetime(last_processed_date_db) + timedelta(days=1)).strftime("%Y%m%d")
+        else:
+            # 如果数据库为空，则从一个很早的日期开始（例如2010年）
+            start_cal_date = "20100101"
+        
+        end_cal_date = datetime.now().strftime("%Y%m%d")
+
+        # 获取Tushare交易日历
         cal_df = dm.pro.trade_cal(
             exchange="",
-            start_date=(datetime.now() - timedelta(days=5)).strftime("%Y%m%d"),
-            end_date=datetime.now().strftime("%Y%m%d"),
+            start_date=start_cal_date,
+            end_date=end_cal_date,
         )
-        latest_trade_date = cal_df[cal_df["is_open"] == 1]["cal_date"].max()
-    except Exception as e:
-        log.error(f"获取最新交易日失败: {e}")
-        return
+        all_trade_dates_ts = set(cal_df[cal_df["is_open"] == 1]["cal_date"].tolist())
 
-    log.info(f"===== 开始执行 {latest_trade_date} 的统一数据管道任务 =====")
-    start_time = time.time()
+        # 获取数据库中已有的factors_exposure日期
+        existing_factors_dates = set()
+        if last_processed_date_db:
+            with dm.engine.connect() as connection:
+                query_existing_dates = text(
+                    "SELECT DISTINCT trade_date FROM factors_exposure WHERE trade_date >= :start_date AND trade_date <= :end_date"
+                )
+                result = connection.execute(query_existing_dates, {
+                    "start_date": start_cal_date, "end_date": end_cal_date
+                }).fetchall()
+                existing_factors_dates = {row[0] for row in result}
 
-    # --- 前置检查机制 ---
-    try:
-        with dm.engine.connect() as connection:
-            check_sql = text(
-                "SELECT 1 FROM factors_exposure WHERE trade_date = :trade_date LIMIT 1"
-            )
-            result = connection.execute(
-                check_sql, {"trade_date": latest_trade_date}
-            ).scalar_one_or_none()
-        if result == 1:
-            log.info(
-                f"检测到数据库中已存在 {latest_trade_date} 的因子数据。任务无需重复执行。"
-            )
+        # 找出所有缺失的交易日
+        dates_to_process = sorted(list(all_trade_dates_ts - existing_factors_dates))
+
+        if not dates_to_process:
+            log.info("所有历史数据均已是最新，无需补漏。任务结束。")
             return
+        else:
+            log.info(f"发现 {len(dates_to_process)} 个缺失或待处理的交易日。")
+
     except Exception as e:
-        log.error(f"在执行前置检查时发生数据库错误: {e}", exc_info=True)
+        log.error(f"确定交易日列表失败: {e}", exc_info=True)
         return
 
-    # --- 执行数据管道 ---
-    # 步骤一：抽取数据
-    raw_data_dict = extract_data(latest_trade_date)
+    # 2. 循环处理每个交易日
+    for current_trade_date in dates_to_process:
+        log.info(f"===== 开始执行 {current_trade_date} 的统一数据管道任务 =====")
+        start_time = time.time()
 
-    # 【性能优化】步骤二：批量预取全市场财务数据
-    log.info("【性能优化】开始批量预取全市场财务数据...")
-    try:
-        # Tushare 的 period 参数可以获取指定报告期的所有股票数据
-        # 我们获取最近两个报告期的数据以确保覆盖率
-        date_dt = pd.to_datetime(latest_trade_date)
-        year = date_dt.year
-        # 动态确定最近的两个报告期
-        q1_period = f"{year}0331"
-        q4_period = f"{year-1}1231"
-        
-        log.info(f"  正在获取 {q1_period} 的财务数据...")
-        fina_q1 = dm.pro.fina_indicator(period=q1_period)
-        log.info(f"  正在获取 {q4_period} 的财务数据...")
-        fina_q4 = dm.pro.fina_indicator(period=q4_period)
-        
-        all_fina_data = pd.concat([fina_q1, fina_q4]).drop_duplicates(subset=['ts_code', 'end_date'])
-        log.info(f"批量预取完成，共获取 {len(all_fina_data)} 条财务记录。")
-    except Exception as e:
-        log.error(f"批量预取财务数据失败: {e}", exc_info=True)
-        all_fina_data = pd.DataFrame()
+        # --- 前置检查机制 (针对当前日期) ---
+        try:
+            with dm.engine.connect() as connection:
+                check_sql = text(
+                    "SELECT 1 FROM factors_exposure WHERE trade_date = :trade_date LIMIT 1"
+                )
+                result = connection.execute(
+                    check_sql, {"trade_date": current_trade_date}
+                ).scalar_one_or_none()
+            if result == 1:
+                log.info(
+                    f"检测到数据库中已存在 {current_trade_date} 的因子数据。跳过。"
+                )
+                continue # 跳过当前日期，处理下一个
+        except Exception as e:
+            log.error(f"在执行前置检查时发生数据库错误: {e}", exc_info=True)
+            continue # 发生错误则跳过当前日期
 
+        # --- 执行数据管道 ---
+        # 步骤一：抽取数据
+        raw_data_dict = extract_data(current_trade_date)
 
-    # 步骤三：计算并存储因子
-    calculate_and_save_factors(latest_trade_date, raw_data_dict, all_fina_data)
+        # 【性能优化】步骤二：批量预取全市场财务数据
+        log.info("【性能优化】开始批量预取全市场财务数据...")
+        try:
+            all_fina_data_list = []
+            ts_codes_for_fina = raw_data_dict["ts_codes"]
+            log.info(f"  正在为 {len(ts_codes_for_fina)} 只股票批量预取财务数据...")
+            
+            # 优化：只对需要更新的股票获取财务数据
+            # 财务数据已在data.py中实现智能缓存，此处无需额外判断
+            for i, code in enumerate(ts_codes_for_fina):
+                if i % 100 == 0: 
+                    log.info(f"    已处理 {i}/{len(ts_codes_for_fina)} 只股票的财务数据...")
+                try:
+                    df_fina = dm.get_fina_indicator(ts_code=code, force_update=False) # 不强制更新，利用内部缓存
+                    if df_fina is not None and not df_fina.empty:
+                        all_fina_data_list.append(df_fina)
+                except Exception as e:
+                    log.warning(f"    为股票 {code} 预取财务数据失败: {e}")
+                    continue
+            
+            if all_fina_data_list:
+                all_fina_data = pd.concat(all_fina_data_list).drop_duplicates(subset=['ts_code', 'end_date'])
+                log.info(f"批量预取完成，共获取 {len(all_fina_data)} 条财务记录。")
+            else:
+                all_fina_data = pd.DataFrame()
+                log.warning("未能成功预取任何财务数据。")
+        except Exception as e:
+            log.error(f"批量预取财务数据失败: {e}", exc_info=True)
+            all_fina_data = pd.DataFrame()
 
-    duration = time.time() - start_time
-    log.info(
-        f"===== {latest_trade_date} 的统一数据管道任务完成！总耗时: {duration:.2f} 秒。====="
-    )
+        # 步骤三：计算并存储因子
+        calculate_and_save_factors(current_trade_date, raw_data_dict, all_fina_data)
+
+        duration = time.time() - start_time
+        log.info(
+            f"===== {current_trade_date} 的统一数据管道任务完成！总耗时: {duration:.2f} 秒。====="
+        )
+
+    log.info("===== 所有待处理交易日的统一数据管道任务全部完成！ =====")
 
 
 if __name__ == "__main__":
     run_daily_pipeline()
-    input("\n任务执行完毕，按 Enter 键退出...")
+    # input("\n任务执行完毕，按 Enter 键退出...") # 移除input，避免非交互式运行挂起

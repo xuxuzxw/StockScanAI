@@ -1,4 +1,4 @@
-# quant_project/run_strategy_daily.py
+# StockScanAI/run_strategy_daily.py
 #
 # 【V2.3 核心自动化引擎】
 # 目的：将所有模块串联起来，形成一个每日自动运行、输出实战级投研晨报的闭环工作流。
@@ -196,7 +196,7 @@ def run_daily_strategy_workflow():
     log.info("正在生成并保存盘前交易计划...")
     try:
         trading_plan = generate_pre_market_plan(target_portfolio, dm.get_stock_basic())
-        plan_path = os.path.join("__pycache__", f"trading_plan_{trade_date}.json")
+        plan_path = os.path.join("data", f"trading_plan_{trade_date}.json")
         with open(plan_path, "w", encoding="utf-8") as f:
             json.dump(trading_plan, f, ensure_ascii=False, indent=4)
         log.info(f"交易计划已成功保存至: {plan_path}")
@@ -243,4 +243,4 @@ def generate_pre_market_plan(
 
 if __name__ == "__main__":
     run_daily_strategy_workflow()
-    input("\n任务执行完毕，按 Enter 键退出...")
+    # input("\n任务执行完毕，按 Enter 键退出...") # 移除input，避免非交互式运行挂起

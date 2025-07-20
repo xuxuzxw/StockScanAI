@@ -1,4 +1,4 @@
-# quant_project/initialize_database.py
+# StockScanAI/initialize_database.py
 from datetime import datetime, timedelta
 
 import pandas as pd

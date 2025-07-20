@@ -1,4 +1,4 @@
-# quant_project/config.py
+# StockScanAI/config.py
 
 import os
 
@@ -152,4 +152,10 @@ API_RATE_LIMITS = {
     "cn_cpi": 450,
     "cn_gdp": 450,
     "shibor": 450,
+}
+
+# --- 异步下载配置 ---
+ASYNC_DOWNLOAD_CONFIG = {
+    "concurrency_limit": 10,  # 并发任务数
+    "requests_per_minute": 450,  # 整体速率限制 (次/分钟)
 }

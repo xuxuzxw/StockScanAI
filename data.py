@@ -1,4 +1,4 @@
-# quant_project/data.py
+# StockScanAI/data.py
 import asyncio
 import json
 import time
@@ -81,8 +81,11 @@ class DataManager:
         self,
         token=config.TUSHARE_TOKEN,
         db_url=config.DATABASE_URL,
-        concurrency_limit=3,
-        requests_per_minute=300,
+        # 【V2.9 优化】从config.py读取异步下载的默认配置，不再硬编码
+        concurrency_limit=config.ASYNC_DOWNLOAD_CONFIG.get("concurrency_limit", 5),
+        requests_per_minute=config.ASYNC_DOWNLOAD_CONFIG.get(
+            "requests_per_minute", 400
+        ),
     ):
         if not token or token == "YOUR_TUSHARE_TOKEN":
             raise ValueError("Tushare Token未在config.py中配置。")
@@ -365,6 +368,88 @@ class DataManager:
                     )
                 )
 
+                # 【V2.5新增】利润表
+                connection.execute(
+                    sqlalchemy.text(
+                        """
+                    CREATE TABLE IF NOT EXISTS financial_income (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE,
+                        f_ann_date DATE,
+                        end_date DATE NOT NULL,
+                        report_type TEXT,
+                        comp_type TEXT,
+                        basic_eps NUMERIC,
+                        diluted_eps NUMERIC,
+                        total_revenue NUMERIC,
+                        n_income NUMERIC,
+                        total_profit NUMERIC,
+                        -- 更多字段根据Tushare接口定义添加
+                        PRIMARY KEY (ts_code, end_date, report_type)
+                    );
+                """
+                    )
+                )
+
+                # 【V2.5新增】资产负债表
+                connection.execute(
+                    sqlalchemy.text(
+                        """
+                    CREATE TABLE IF NOT EXISTS financial_balancesheet (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE,
+                        f_ann_date DATE,
+                        end_date DATE NOT NULL,
+                        report_type TEXT,
+                        comp_type TEXT,
+                        total_assets NUMERIC,
+                        total_liab NUMERIC,
+                        total_hldr_eqy_inc_min_int NUMERIC,
+                        -- 更多字段根据Tushare接口定义添加
+                        PRIMARY KEY (ts_code, end_date, report_type)
+                    );
+                """
+                    )
+                )
+
+                # 【V2.5新增】现金流量表
+                connection.execute(
+                    sqlalchemy.text(
+                        """
+                    CREATE TABLE IF NOT EXISTS financial_cashflow (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE,
+                        f_ann_date DATE,
+                        end_date DATE NOT NULL,
+                        report_type TEXT,
+                        comp_type TEXT,
+                        n_cashflow_act NUMERIC,
+                        n_add_capital NUMERIC,
+                        -- 更多字段根据Tushare接口定义添加
+                        PRIMARY KEY (ts_code, end_date, report_type)
+                    );
+                """
+                    )
+                )
+
+                # 【V2.5新增】十大流通股东表
+                connection.execute(
+                    sqlalchemy.text(
+                        """
+                    CREATE TABLE IF NOT EXISTS top10_floatholders (
+                        ts_code TEXT NOT NULL,
+                        ann_date DATE,
+                        end_date DATE NOT NULL,
+                        holder_name TEXT,
+                        hold_ratio NUMERIC,
+                        hold_amount NUMERIC,
+                        -- 更多字段根据Tushare接口定义添加
+                        PRIMARY KEY (ts_code, end_date, holder_name)
+                    );
+                """
+                    )
+                )
+
                 # 【V2.2 新增】统一的财务指标主表
                 connection.execute(
                     sqlalchemy.text(
@@ -470,26 +555,74 @@ class DataManager:
         # 这比在__init__中创建一个长期连接更健壮
         return self.engine.connect()
 
-    def _fetch_and_cache(self, api_func, table_name, force_update=False, **kwargs):
-        """通用数据获取与缓存逻辑"""
+    def _fetch_and_cache(self, api_func, table_name, force_update=False, frequency="daily", **kwargs):
+        """
+        通用数据获取与缓存逻辑。
+        新增 frequency 参数，用于判断数据的“新鲜度”。
+        """
         inspector = sqlalchemy.inspect(self.engine)
         table_exists = inspector.has_table(table_name)
 
         if not force_update:
             try:
                 if table_exists:
-                    # 使用 with 语句确保连接被正确关闭
                     with self.engine.connect() as connection:
-                        df = pd.read_sql(f"SELECT * FROM {table_name}", connection)
-                    if not df.empty:
-                        return df
-            except Exception:
-                pass
+                        # 尝试获取最新一条数据的时间戳
+                        query_latest = sqlalchemy.text(f"SELECT MAX(trade_date) FROM {table_name}")
+                        if table_name == "macro_cn_gdp": # GDP表没有trade_date，用quarter
+                            query_latest = sqlalchemy.text(f"SELECT MAX(quarter) FROM {table_name}")
+                        elif table_name in ["macro_cn_m", "macro_cn_cpi", "macro_cn_pmi"]:# 月度数据
+                            query_latest = sqlalchemy.text(f"SELECT MAX(month) FROM {table_name}")
+                        
+                        latest_date_in_db = connection.execute(query_latest).scalar_one_or_none()
+
+                    if latest_date_in_db:
+                        is_fresh = False
+                        current_date = datetime.now()
+
+                        if frequency == "daily":
+                            if pd.to_datetime(latest_date_in_db).date() == current_date.date():
+                                is_fresh = True
+                        elif frequency == "monthly":
+                            # 假设 monthly 数据在每月15号之后更新
+                            latest_month_in_db = pd.to_datetime(str(latest_date_in_db) + "01").month
+                            latest_year_in_db = pd.to_datetime(str(latest_date_in_db) + "01").year
+                            if (current_date.year == latest_year_in_db and current_date.month == latest_month_in_db and current_date.day <= 15) or \
+                               (current_date.year == latest_year_in_db and current_date.month > latest_month_in_db) or \
+                               (current_date.year > latest_year_in_db):
+                                is_fresh = False # 已过更新时间，需要更新
+                            else:
+                                is_fresh = True # 还在当月15号之前，数据新鲜
+
+                        elif frequency == "quarterly":
+                            # 假设季度数据在季末后45天内更新
+                            latest_quarter_end = pd.to_datetime(str(latest_date_in_db) + "01") # 转换为日期
+                            if latest_quarter_end.month == 3: # Q1
+                                next_report_due = latest_quarter_end.replace(month=5, day=15)
+                            elif latest_quarter_end.month == 6: # Q2
+                                next_report_due = latest_quarter_end.replace(month=8, day=15)
+                            elif latest_quarter_end.month == 9: # Q3
+                                next_report_due = latest_quarter_end.replace(month=11, day=15)
+                            elif latest_quarter_end.month == 12: # Q4
+                                next_report_due = latest_quarter_end.replace(year=latest_quarter_end.year + 1, month=3, day=31)
+                            else:
+                                next_report_due = current_date # 无法判断，强制更新
+
+                            if current_date < next_report_due:
+                                is_fresh = True
+
+                        if is_fresh:
+                            log.info(f"数据库中 {table_name} 表的最新数据 ({latest_date_in_db}) 仍是新鲜的，直接从数据库返回。")
+                            df = pd.read_sql(f"SELECT * FROM {table_name}", connection)
+                            if not df.empty:
+                                return df
+
+            except Exception as e:
+                log.warning(f"从 {table_name} 读取最新数据失败: {e}。将尝试从API获取。")
 
         df_api = api_func(**kwargs)
         if df_api is not None and not df_api.empty:
             with self.engine.connect() as connection:
-                # 使用事务来确保写入的原子性
                 with connection.begin():
                     df_api.to_sql(
                         table_name, connection, if_exists="replace", index=False
@@ -620,6 +753,106 @@ class DataManager:
             df_db = df_db.sort_values(by=date_column).reset_index(drop=True)
         return df_db
 
+    def _fetch_and_cache_quarterly(
+        self, table_name, api_func, ts_code, report_type="1", **kwargs
+    ):
+        """
+        【V2.5新增】为季度财务数据设计的增量更新缓存逻辑。
+        - 检查数据库中是否存在最新季度数据。
+        - 如果存在且未到下一个报告期，则直接从数据库返回。
+        - 否则，从API获取数据并UPSERT到数据库。
+        """
+        inspector = sqlalchemy.inspect(self.engine)
+        table_exists = inspector.has_table(table_name)
+        df_db = pd.DataFrame()
+
+        # 1. 尝试从数据库获取最新数据
+        if table_exists:
+            try:
+                query = sqlalchemy.text(
+                    f"""
+                    SELECT * FROM {table_name}
+                    WHERE ts_code = :ts_code AND report_type = :report_type
+                    ORDER BY end_date DESC
+                    LIMIT 1
+                """
+                )
+                with self.engine.connect() as connection:
+                    latest_in_db = pd.read_sql(
+                        query,
+                        connection,
+                        params={"ts_code": ts_code, "report_type": report_type},
+                    )
+
+                if not latest_in_db.empty:
+                    latest_end_date_db = pd.to_datetime(latest_in_db["end_date"].iloc[0])
+                    current_date = datetime.now()
+
+                    # 判断是否已到下一个报告期
+                    # 假设报告期是 3.31, 6.30, 9.30, 12.31
+                    # 如果当前日期在下一个报告期之前，则认为数据库数据是新鲜的
+                    is_fresh = False
+                    if latest_end_date_db.month == 3 and current_date.month <= 6:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 6 and current_date.month <= 9:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 9 and current_date.month <= 12:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 12 and current_date.month <= 3:
+                        is_fresh = True
+
+                    if is_fresh:
+                        log.info(
+                            f"数据库中 {table_name} 表 {ts_code} 的最新季度数据 ({latest_end_date_db.strftime('%Y%m%d')}) 仍是新鲜的，直接从数据库返回。"
+                        )
+                        # 从数据库获取所有历史数据
+                        query_all = sqlalchemy.text(
+                            f"""
+                            SELECT * FROM {table_name}
+                            WHERE ts_code = :ts_code AND report_type = :report_type
+                            ORDER BY end_date DESC
+                        """
+                        )
+                        with self.engine.connect() as connection:
+                            df_db = pd.read_sql(
+                                query_all,
+                                connection,
+                                params={"ts_code": ts_code, "report_type": report_type},
+                            )
+                        return df_db
+
+            except Exception as e:
+                log.warning(f"从 {table_name} 读取最新季度数据失败: {e}，将尝试从API获取。")
+
+        # 2. 从API获取数据并UPSERT
+        log.info(f"从API获取 {table_name} 表 {ts_code} 的季度数据...")
+        df_api = api_func(ts_code=ts_code, report_type=report_type, **kwargs)
+
+        if df_api is not None and not df_api.empty:
+            # 确保 end_date 和 ann_date 是日期格式
+            if 'end_date' in df_api.columns:
+                df_api['end_date'] = pd.to_datetime(df_api['end_date'], errors='coerce').dt.strftime('%Y%m%d')
+            if 'ann_date' in df_api.columns:
+                df_api['ann_date'] = pd.to_datetime(df_api['ann_date'], errors='coerce').dt.strftime('%Y%m%d')
+
+            self._upsert_data(table_name, df_api, ["ts_code", "end_date", "report_type"])
+            # 重新从数据库读取所有数据以确保完整性
+            query_all = sqlalchemy.text(
+                f"""
+                SELECT * FROM {table_name}
+                WHERE ts_code = :ts_code AND report_type = :report_type
+                ORDER BY end_date DESC
+            """
+            )
+            with self.engine.connect() as connection:
+                df_db = pd.read_sql(
+                    query_all,
+                    connection,
+                    params={"ts_code": ts_code, "report_type": report_type},
+                )
+            return df_db
+        return pd.DataFrame()
+
     @api_rate_limit("daily")
     def get_daily(self, ts_code, start_date, end_date):
         """【优化】获取日线行情，已集成增量缓存"""
@@ -731,74 +964,141 @@ class DataManager:
         table_name = "financial_indicators"
         primary_keys = ["ts_code", "end_date"]
 
-        # 强制更新或首次获取时，从API获取
-        if force_update:
-            df_api = self.pro.fina_indicator(ts_code=ts_code)
-            if df_api is not None and not df_api.empty:
-                # 为了防止列不匹配，只选择我们在新表中定义的列
-                # 注意：这是一个简化处理，实际生产中需要一个完整的列映射
-                db_cols = [
-                    "ts_code",
-                    "ann_date",
-                    "end_date",
-                    "roe",
-                    "netprofit_yoy",
-                    "debt_to_assets",
-                    "or_yoy",
-                ]
-                api_cols_to_keep = [col for col in db_cols if col in df_api.columns]
-                self._upsert_data(table_name, df_api[api_cols_to_keep], primary_keys)
+        # 1. 尝试从数据库获取最新数据
+        if not force_update:
+            try:
+                query = sqlalchemy.text(
+                    f"""
+                    SELECT * FROM {table_name}
+                    WHERE ts_code = :ts_code
+                    ORDER BY end_date DESC
+                    LIMIT 1
+                """
+                )
+                with self.engine.connect() as connection:
+                    latest_in_db = pd.read_sql(
+                        query,
+                        connection,
+                        params={"ts_code": ts_code},
+                    )
 
-        # 无论如何，都从数据库返回该股票的完整历史数据
-        try:
-            query = sqlalchemy.text(
+                if not latest_in_db.empty:
+                    latest_end_date_db = pd.to_datetime(latest_in_db["end_date"].iloc[0])
+                    current_date = datetime.now()
+
+                    # 判断是否已到下一个报告期
+                    is_fresh = False
+                    if latest_end_date_db.month == 3 and current_date.month <= 6:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 6 and current_date.month <= 9:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 9 and current_date.month <= 12:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 12 and current_date.month <= 3:
+                        is_fresh = True
+
+                    if is_fresh:
+                        log.info(
+                            f"数据库中 {table_name} 表 {ts_code} 的最新财务指标 ({latest_end_date_db.strftime('%Y%m%d')}) 仍是新鲜的，直接从数据库返回。"
+                        )
+                        # 从数据库获取所有历史数据
+                        query_all = sqlalchemy.text(
+                            f"SELECT * FROM {table_name} WHERE ts_code = :ts_code"
+                        )
+                        with self.engine.connect() as connection:
+                            df_db = pd.read_sql(
+                                query_all,
+                                connection,
+                                params={"ts_code": ts_code},
+                            )
+                        return df_db.sort_values(by="end_date", ascending=False).reset_index(drop=True)
+
+            except Exception as e:
+                log.warning(f"从 {table_name} 读取最新财务指标失败: {e}，将尝试从API获取。")
+
+        # 2. 从API获取数据并UPSERT
+        log.info(f"从API获取 {table_name} 表 {ts_code} 的财务指标...")
+        
+        # 确定增量获取的起始日期
+        fetch_start_date = None
+        if not force_update: # 只有在非强制更新模式下才尝试增量
+            try:
+                query_max_date = sqlalchemy.text(
+                    f"SELECT MAX(end_date) FROM {table_name} WHERE ts_code = :ts_code"
+                )
+                with self.engine.connect() as connection:
+                    max_date_in_db = connection.execute(query_max_date, {"ts_code": ts_code}).scalar_one_or_none()
+                
+                if max_date_in_db:
+                    # 从数据库最新日期的下一天开始获取
+                    fetch_start_date = (pd.to_datetime(max_date_in_db) + pd.Timedelta(days=1)).strftime("%Y%m%d")
+            except Exception as e:
+                log.warning(f"获取数据库最大日期失败: {e}，将尝试全量获取。")
+
+        # 如果没有指定起始日期（例如数据库为空或获取最大日期失败），则从一个很早的日期开始
+        if not fetch_start_date:
+            fetch_start_date = "19900101" # 确保获取所有历史数据
+
+        # 调用Tushare API，传入增量日期参数
+        df_api = self.pro.fina_indicator(ts_code=ts_code, start_date=fetch_start_date)
+        
+        if df_api is not None and not df_api.empty:
+            # 确保 end_date 和 ann_date 是日期格式
+            if 'end_date' in df_api.columns:
+                df_api['end_date'] = pd.to_datetime(df_api['end_date'], errors='coerce').dt.strftime('%Y%m%d')
+            if 'ann_date' in df_api.columns:
+                df_api['ann_date'] = pd.to_datetime(df_api['ann_date'], errors='coerce').dt.strftime('%Y%m%d')
+
+            db_cols = [
+                "ts_code",
+                "ann_date",
+                "end_date",
+                "roe",
+                "netprofit_yoy",
+                "debt_to_assets",
+                "or_yoy",
+            ]
+            api_cols_to_keep = [col for col in db_cols if col in df_api.columns]
+            self._upsert_data(table_name, df_api[api_cols_to_keep], primary_keys)
+
+            # 重新从数据库读取所有数据以确保完整性
+            query_all = sqlalchemy.text(
                 f"SELECT * FROM {table_name} WHERE ts_code = :ts_code"
             )
             with self.engine.connect() as connection:
-                df_db = pd.read_sql(query, connection, params={"ts_code": ts_code})
-            if not df_db.empty:
-                return df_db.sort_values(by="end_date", ascending=False).reset_index(
-                    drop=True
-                )
-            else:  # 如果数据库为空，则触发一次API更新
-                df_api = self.pro.fina_indicator(ts_code=ts_code)
-                if df_api is not None and not df_api.empty:
-                    db_cols = [
-                        "ts_code",
-                        "ann_date",
-                        "end_date",
-                        "roe",
-                        "netprofit_yoy",
-                        "debt_to_assets",
-                        "or_yoy",
-                    ]
-                    api_cols_to_keep = [col for col in db_cols if col in df_api.columns]
-                    self._upsert_data(
-                        table_name, df_api[api_cols_to_keep], primary_keys
-                    )
-                    return (
-                        df_api[api_cols_to_keep]
-                        .sort_values(by="end_date", ascending=False)
-                        .reset_index(drop=True)
-                    )
-
-        except Exception as e:
-            # log.error(f"从 {table_name} 读取 {ts_code} 数据失败: {e}。")
-            return pd.DataFrame()
-
+                df_db = pd.read_sql(query_all, connection, params={"ts_code": ts_code})
+            return df_db.sort_values(by="end_date", ascending=False).reset_index(drop=True)
         return pd.DataFrame()
 
     @api_rate_limit("income")
     def get_income(self, ts_code, period):
-        return self.pro.income(ts_code=ts_code, period=period, report_type="1")
+        return self._fetch_and_cache_quarterly(
+            table_name="financial_income",
+            api_func=self.pro.income,
+            ts_code=ts_code,
+            period=period,
+            report_type="1",
+        )
 
     @api_rate_limit("balancesheet")
     def get_balancesheet(self, ts_code, period):
-        return self.pro.balancesheet(ts_code=ts_code, period=period, report_type="1")
+        return self._fetch_and_cache_quarterly(
+            table_name="financial_balancesheet",
+            api_func=self.pro.balancesheet,
+            ts_code=ts_code,
+            period=period,
+            report_type="1",
+        )
 
     @api_rate_limit("cashflow")
     def get_cashflow(self, ts_code, period):
-        return self.pro.cashflow(ts_code=ts_code, period=period, report_type="1")
+        return self._fetch_and_cache_quarterly(
+            table_name="financial_cashflow",
+            api_func=self.pro.cashflow,
+            ts_code=ts_code,
+            period=period,
+            report_type="1",
+        )
 
     # --- (四) 资金流与筹码 (同步) ---
     @api_rate_limit("hk_hold")
@@ -814,8 +1114,92 @@ class DataManager:
         )
 
     @api_rate_limit("top10_floatholders")
-    def get_top10_floatholders(self, ts_code, period):
-        return self.pro.top10_floatholders(ts_code=ts_code, period=period)
+    def get_top10_floatholders(self, ts_code: str, period: str = None, force_update=False):
+        """
+        【V2.5优化】获取十大流通股东，支持按季度缓存。
+        :param ts_code: 股票代码
+        :param period: 报告期，如 '20240331'。如果为None，则尝试获取最新。
+        :param force_update: 是否强制从API更新。
+        """
+        table_name = "top10_floatholders"
+        primary_keys = ["ts_code", "end_date", "holder_name"]
+
+        # 1. 尝试从数据库获取最新数据
+        if not force_update:
+            try:
+                query = sqlalchemy.text(
+                    f"""
+                    SELECT * FROM {table_name}
+                    WHERE ts_code = :ts_code
+                    ORDER BY end_date DESC
+                    LIMIT 1
+                """
+                )
+                with self.engine.connect() as connection:
+                    latest_in_db = pd.read_sql(
+                        query,
+                        connection,
+                        params={"ts_code": ts_code},
+                    )
+
+                if not latest_in_db.empty:
+                    latest_end_date_db = pd.to_datetime(latest_in_db["end_date"].iloc[0])
+                    current_date = datetime.now()
+
+                    # 判断是否已到下一个报告期
+                    is_fresh = False
+                    if latest_end_date_db.month == 3 and current_date.month <= 6:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 6 and current_date.month <= 9:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 9 and current_date.month <= 12:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 12 and current_date.month <= 3:
+                        is_fresh = True
+
+                    if is_fresh:
+                        log.info(
+                            f"数据库中 {table_name} 表 {ts_code} 的最新十大流通股东 ({latest_end_date_db.strftime('%Y%m%d')}) 仍是新鲜的，直接从数据库返回。"
+                        )
+                        # 从数据库获取所有历史数据
+                        query_all = sqlalchemy.text(
+                            f"SELECT * FROM {table_name} WHERE ts_code = :ts_code"
+                        )
+                        with self.engine.connect() as connection:
+                            df_db = pd.read_sql(
+                                query_all,
+                                connection,
+                                params={"ts_code": ts_code},
+                            )
+                        return df_db.sort_values(by="end_date", ascending=False).reset_index(drop=True)
+
+            except Exception as e:
+                log.warning(f"从 {table_name} 读取最新十大流通股东失败: {e}，将尝试从API获取。")
+
+        # 2. 从API获取数据并UPSERT
+        log.info(f"从API获取 {table_name} 表 {ts_code} 的十大流通股东...")
+        df_api = self.pro.top10_floatholders(ts_code=ts_code, period=period)
+
+        if df_api is not None and not df_api.empty:
+            # 确保 end_date 和 ann_date 是日期格式
+            if 'end_date' in df_api.columns:
+                df_api['end_date'] = pd.to_datetime(df_api['end_date'], errors='coerce').dt.strftime('%Y%m%d')
+            if 'ann_date' in df_api.columns:
+                df_api['ann_date'] = pd.to_datetime(df_api['ann_date'], errors='coerce').dt.strftime('%Y%m%d')
+
+            self._upsert_data(table_name, df_api, primary_keys)
+            # 重新从数据库读取所有数据以确保完整性
+            query_all = sqlalchemy.text(
+                f"SELECT * FROM {table_name} WHERE ts_code = :ts_code"
+            )
+            with self.engine.connect() as connection:
+                df_db = pd.read_sql(
+                    query_all,
+                    connection,
+                    params={"ts_code": ts_code},
+                )
+            return df_db.sort_values(by="end_date", ascending=False).reset_index(drop=True)
+        return pd.DataFrame()
 
     @api_rate_limit("holder_number")
     def get_holder_number(self, ts_code: str, force_update=False):
@@ -823,8 +1207,60 @@ class DataManager:
         table_name = "stk_holdernumber"
         primary_keys = ["ts_code", "end_date"]
 
-        # 即使非强制更新，也从API获取一次，以抓取最新的数据
-        # 因为API不支持增量查询，但我们的UPSERT逻辑可以处理增量写入
+        # 1. 尝试从数据库获取最新数据
+        if not force_update:
+            try:
+                query = sqlalchemy.text(
+                    f"""
+                    SELECT * FROM {table_name}
+                    WHERE ts_code = :ts_code
+                    ORDER BY end_date DESC
+                    LIMIT 1
+                """
+                )
+                with self.engine.connect() as connection:
+                    latest_in_db = pd.read_sql(
+                        query,
+                        connection,
+                        params={"ts_code": ts_code},
+                    )
+
+                if not latest_in_db.empty:
+                    latest_end_date_db = pd.to_datetime(latest_in_db["end_date"].iloc[0])
+                    current_date = datetime.now()
+
+                    # 判断是否已到下一个报告期
+                    is_fresh = False
+                    if latest_end_date_db.month == 3 and current_date.month <= 6:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 6 and current_date.month <= 9:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 9 and current_date.month <= 12:
+                        is_fresh = True
+                    elif latest_end_date_db.month == 12 and current_date.month <= 3:
+                        is_fresh = True
+
+                    if is_fresh:
+                        log.info(
+                            f"数据库中 {table_name} 表 {ts_code} 的最新股东人数 ({latest_end_date_db.strftime('%Y%m%d')}) 仍是新鲜的，直接从数据库返回。"
+                        )
+                        # 从数据库获取所有历史数据
+                        query_all = sqlalchemy.text(
+                            f"SELECT * FROM {table_name} WHERE ts_code = :ts_code"
+                        )
+                        with self.engine.connect() as connection:
+                            df_db = pd.read_sql(
+                                query_all,
+                                connection,
+                                params={"ts_code": ts_code},
+                            )
+                        return df_db.sort_values(by="end_date").reset_index(drop=True)
+
+            except Exception as e:
+                log.warning(f"从 {table_name} 读取最新股东人数失败: {e}，将尝试从API获取。")
+
+        # 2. 从API获取数据并UPSERT
+        log.info(f"从API获取 {table_name} 表 {ts_code} 的股东人数...")
         df_api = self.pro.stk_holdernumber(ts_code=ts_code)
         if df_api is not None and not df_api.empty:
             self._upsert_data(table_name, df_api, primary_keys)
@@ -1019,11 +1455,66 @@ class DataManager:
     def get_express(self, ts_code: str, start_date: str, end_date: str):
         """【V2.1新增】获取业绩快报数据，带缓存。"""
         table_name = "express"
+        primary_keys = ["ts_code", "end_date"]
+
+        # 1. 尝试从数据库获取最新数据
+        try:
+            query = sqlalchemy.text(
+                f"""
+                SELECT * FROM {table_name}
+                WHERE ts_code = :ts_code AND end_date BETWEEN :start AND :end
+                ORDER BY end_date DESC
+                LIMIT 1
+                """
+            )
+            with self.engine.connect() as connection:
+                latest_in_db = pd.read_sql(
+                    query,
+                    connection,
+                    params={"ts_code": ts_code, "start": start_date, "end": end_date},
+                )
+
+            if not latest_in_db.empty:
+                latest_end_date_db = pd.to_datetime(latest_in_db["end_date"].iloc[0])
+                current_date = datetime.now()
+
+                # 判断是否已到下一个报告期
+                is_fresh = False
+                if latest_end_date_db.month == 3 and current_date.month <= 6:
+                    is_fresh = True
+                elif latest_end_date_db.month == 6 and current_date.month <= 9:
+                    is_fresh = True
+                elif latest_end_date_db.month == 9 and current_date.month <= 12:
+                    is_fresh = True
+                elif latest_end_date_db.month == 12 and current_date.month <= 3:
+                    is_fresh = True
+
+                if is_fresh:
+                    log.info(
+                        f"数据库中 {table_name} 表 {ts_code} 的最新业绩快报 ({latest_end_date_db.strftime('%Y%m%d')}) 仍是新鲜的，直接从数据库返回。"
+                    )
+                    # 从数据库获取所有历史数据
+                    query_all = sqlalchemy.text(
+                        f"SELECT * FROM {table_name} WHERE ts_code = :ts_code AND end_date BETWEEN :start AND :end"
+                    )
+                    with self.engine.connect() as connection:
+                        df_db = pd.read_sql(
+                            query_all,
+                            connection,
+                            params={"ts_code": ts_code, "start": start_date, "end": end_date},
+                        )
+                    return df_db
+
+        except Exception as e:
+            log.warning(f"从 {table_name} 读取最新业绩快报失败: {e}，将尝试从API获取。")
+
+        # 2. 从API获取数据并UPSERT
+        log.info(f"从API获取 {table_name} 表 {ts_code} 的业绩快报...")
         df_api = self.pro.express(
             ts_code=ts_code, start_date=start_date, end_date=end_date
         )
         if df_api is not None and not df_api.empty:
-            self._upsert_data(table_name, df_api, ["ts_code", "end_date"])
+            self._upsert_data(table_name, df_api, primary_keys)
 
         # 从数据库读取返回，确保数据完整性
         try:
@@ -1039,7 +1530,7 @@ class DataManager:
             return df_db
         except Exception as e:
             print(f"从 {table_name} 读取 {ts_code} 数据失败: {e}。")
-            return df_api  # 如果读取失败，返回刚从API获取的数据
+            return pd.DataFrame() # 如果读取失败，返回空DataFrame
 
     @api_rate_limit("block_trade")
     def get_block_trade(
@@ -1082,6 +1573,7 @@ class DataManager:
             self.pro.cn_m,
             "macro_cn_m",
             force_update=force_update,
+            frequency="monthly",
             start_m=start_m,
             end_m=end_m,
         )
@@ -1092,6 +1584,7 @@ class DataManager:
             self.pro.cn_pmi,
             "macro_cn_pmi",
             force_update=force_update,
+            frequency="monthly",
             start_m=start_m,
             end_m=end_m,
         )
@@ -1103,6 +1596,7 @@ class DataManager:
             self.pro.cn_cpi,
             "macro_cn_cpi",
             force_update=force_update,
+            frequency="monthly",
             start_m=start_m,
             end_m=end_m,
         )
@@ -1114,6 +1608,7 @@ class DataManager:
             self.pro.cn_gdp,
             "macro_cn_gdp",
             force_update=force_update,
+            frequency="quarterly",
             start_q=start_q,
             end_q=end_q,
         )

@@ -1,4 +1,4 @@
-# quant_project/intelligence.py
+# StockScanAI/intelligence.py
 # 【V2.0 智能优化版】
 import json
 import smtplib

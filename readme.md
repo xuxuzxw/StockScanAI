@@ -79,8 +79,8 @@ V2.0 的目标是在 V1.0 的基础上，建立更完整、更强大的“宏观
 
 1.  **克隆项目**:
     ```bash
-    git clone [https://your-repo-url.com/quant_project.git](https://your-repo-url.com/quant_project.git)
-    cd quant_project
+    git clone [https://your-repo-url.com/StockScanAI.git](https://your-repo-url.com/StockScanAI.git)
+    cd StockScanAI
     ```
 
 2.  **创建虚拟环境并安装依赖**:
