@@ -19,12 +19,12 @@ pause > nul
 
 :STEP_1
 echo.
-echo --- [步骤 1/4] 数据库健康检查 (database_health_checker.py)...
-echo    此步骤将检查数据库连接和基础设施是否正常。
-python database_health_checker.py
+echo --- [步骤 1/4] 系统健康检查 (run_system_check.py)...
+echo    此步骤将检查数据库连接、配置和基础设施是否正常。
+python run_system_check.py --mode quick
 if %errorlevel% neq 0 (
     echo.
-    echo    错误: 数据库健康检查失败！请检查 .env 文件中的数据库配置。
+    echo    错误: 系统健康检查失败！请检查 .env 文件中的配置。
     goto:END
 )
 echo --- [步骤 1/4] 完成 ---

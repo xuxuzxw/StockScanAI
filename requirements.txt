@@ -25,6 +25,9 @@ aiohttp
 # --- 配置与环境 ---
 python-dotenv
 
+# --- 系统监控 ---
+psutil
+
 # --- AI API 调用 ---
 requests
 

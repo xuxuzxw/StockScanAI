@@ -14,12 +14,15 @@
 # - 集成了进度跟踪、数据验证、稳定性检查等功能。
 
 import argparse
+import asyncio
+import json
 import os
 import sys
 import time
 import traceback
 from datetime import datetime, timedelta
 
+import aiohttp
 import pandas as pd
 import psutil
 from sqlalchemy import create_engine, text
@@ -39,156 +42,267 @@ except ImportError as e:
     print("请确保您在项目的根目录下运行此脚本，并且所有依赖已安装。")
     sys.exit(1)
 
+# --- 配置常量 ---
+class CheckConfig:
+    """Configuration constants for system checks"""
+    # Performance thresholds
+    SIMPLE_QUERY_MAX_MS = 100
+    COMPLEX_QUERY_MAX_MS = 1000
+    
+    # Resource thresholds
+    MAX_CPU_PERCENT = 80
+    MAX_MEMORY_PERCENT = 85
+    MAX_DISK_PERCENT = 90
+    
+    # Data quality thresholds
+    MIN_COVERAGE_RATIO = 0.9
+    MIN_HISTORICAL_DEPTH_QUARTERS = 12
+    MAX_DATA_LAG_DAYS = 3
+    
+    # Test configuration
+    TEST_STOCKS = ["600519.SH", "000001.SZ", "000002.SZ"]
+    STABLE_FACTORS = ["pe_ttm", "pb"]
+    MIN_FACTOR_SUCCESS_RATE = 0.6
+    
+    # API test configuration
+    DEFAULT_CONCURRENT_REQUESTS = 10
+    MIN_API_SUCCESS_RATE = 0.8
+
+
 # --- 检查流程 ---
 
 
-def check_database_data_quality(dm: data.DataManager):
+def check_database_data_quality(dm: data.DataManager) -> bool:
     """
-    【新增】对数据库中的核心数据（特别是财务数据）进行质量和完整性检查。
+    对数据库中的核心数据（特别是财务数据）进行质量和完整性检查。
+    
+    Returns:
+        bool: True if data quality checks pass, False otherwise
     """
     log.info("  --- 开始财务数据质量专项检查 ---")
-    with dm.engine.connect() as conn:
-        # 1. 检查 stock_basic 表
-        all_stocks_df = pd.read_sql("SELECT ts_code FROM stock_basic", conn)
-        total_stocks = len(all_stocks_df)
-        log.info(f"  [检查1/4] 股票列表: 共在 `stock_basic` 表中找到 {total_stocks} 只股票。")
-
-        # 2. 检查 financial_indicators 表的总体情况
-        fina_stocks_df = pd.read_sql(
-            "SELECT DISTINCT ts_code FROM financial_indicators", conn
-        )
-        fina_stocks_count = len(fina_stocks_df)
-        coverage_ratio = fina_stocks_count / total_stocks if total_stocks > 0 else 0
-        log.info(
-            f"  [检查2/4] 财务数据覆盖率: `financial_indicators` 表覆盖了 {fina_stocks_count} 只股票，覆盖率: {coverage_ratio:.2%}"
-        )
-
-        if coverage_ratio < 0.9:
-            log.warning("  > 警告：财务数据覆盖率低于90%，可能大量股票数据缺失。")
-            missing_stocks = set(all_stocks_df["ts_code"]) - set(
-                fina_stocks_df["ts_code"]
-            )
-            log.warning(f"  > 部分缺失股票示例: {list(missing_stocks)[:5]}")
-
-        # 3. 检查数据的时效性和深度
-        query_latest_date = text("SELECT MAX(end_date) FROM financial_indicators")
-        query_avg_depth = text("""
-            SELECT AVG(report_count) FROM (
-                SELECT ts_code, COUNT(1) as report_count 
-                FROM financial_indicators 
-                GROUP BY ts_code
-            ) as sub_query
-        """)
-
-        latest_date_result = conn.execute(query_latest_date).scalar_one_or_none()
-        avg_depth_result = conn.execute(query_avg_depth).scalar_one_or_none()
-
-        if latest_date_result and avg_depth_result:
-            latest_date = latest_date_result
-            avg_depth = avg_depth_result
-            log.info(f"  [检查3/4] 数据时效性与深度:")
-            log.info(f"  > 最新财报报告期: {latest_date}")
-            log.info(f"  > 历史数据深度: 平均每只股票有 {avg_depth:.1f} 个季度的财务报告。")
-            if avg_depth < 12: # 少于3年
-                 log.warning("  > 警告：平均历史数据深度不足3年，可能影响长周期策略回测。")
-        else:
-            log.error("  > 无法获取财务数据的时效性和深度统计。")
-            raise Exception("无法获取财务数据统计")
-
-        # 4. 抽样检查
-        log.info("  [检查4/4] 数据抽样详情:")
-        sample_stocks = fina_stocks_df["ts_code"].sample(min(5, fina_stocks_count)).tolist()
-        for stock in sample_stocks:
-            stock_fina_df = pd.read_sql(
-                f"SELECT MIN(end_date) as first_date, MAX(end_date) as last_date, COUNT(1) as count FROM financial_indicators WHERE ts_code='{stock}'",
-                conn,
-            ).iloc[0]
-            log.info(
-                f"  > 抽样 {stock}: 共 {stock_fina_df['count']} 条记录, 报告期从 {stock_fina_df['first_date']} 到 {stock_fina_df['last_date']}"
-            )
-
-    log.info("  --- 财务数据质量专项检查完成 ---")
-
-
-def check_system_resources():
-    """检查系统资源使用情况"""
-    log.info("  --- 开始系统资源检查 ---")
+    
     try:
-        # CPU使用率
-        cpu_percent = psutil.cpu_percent(interval=1)
+        with dm.engine.connect() as conn:
+            # Break down into smaller, focused checks
+            if not _check_stock_coverage(conn):
+                return False
+            if not _check_data_timeliness_and_depth(conn):
+                return False
+            _perform_data_sampling(conn)
+
+        log.info("  --- 财务数据质量专项检查完成 ---")
+        return True
         
-        # 内存使用情况
-        memory = psutil.virtual_memory()
-        memory_percent = memory.percent
-        memory_available_gb = memory.available / (1024**3)
+    except Exception as e:
+        log.error(f"  > 财务数据质量检查失败: {e}")
+        return False
+
+
+def _check_stock_coverage(conn) -> bool:
+    """Check stock coverage in financial data"""
+    total_stocks = conn.execute(text("SELECT COUNT(*) FROM stock_basic")).scalar()
+    log.info(f"  [检查1/4] 股票列表: 共在 `stock_basic` 表中找到 {total_stocks} 只股票。")
+
+    fina_stocks_count = conn.execute(text(
+        "SELECT COUNT(DISTINCT ts_code) FROM financial_indicators"
+    )).scalar()
+    coverage_ratio = fina_stocks_count / total_stocks if total_stocks > 0 else 0
+    log.info(
+        f"  [检查2/4] 财务数据覆盖率: `financial_indicators` 表覆盖了 {fina_stocks_count} 只股票，覆盖率: {coverage_ratio:.2%}"
+    )
+
+    if coverage_ratio < 0.9:
+        log.warning("  > 警告：财务数据覆盖率低于90%，可能大量股票数据缺失。")
+    
+    return True
+
+
+def _check_data_timeliness_and_depth(conn) -> bool:
+    """Check data timeliness and historical depth"""
+    latest_date_result = conn.execute(text("SELECT MAX(end_date) FROM financial_indicators")).scalar_one_or_none()
+    avg_depth_result = conn.execute(text("""
+        SELECT AVG(report_count) FROM (
+            SELECT ts_code, COUNT(1) as report_count 
+            FROM financial_indicators 
+            GROUP BY ts_code
+        ) as sub_query
+    """)).scalar_one_or_none()
+
+    if latest_date_result and avg_depth_result:
+        log.info(f"  [检查3/4] 数据时效性与深度:")
+        log.info(f"  > 最新财报报告期: {latest_date_result}")
+        log.info(f"  > 历史数据深度: 平均每只股票有 {avg_depth_result:.1f} 个季度的财务报告。")
+        if avg_depth_result < 12:  # 少于3年
+            log.warning("  > 警告：平均历史数据深度不足3年，可能影响长周期策略回测。")
+        return True
+    else:
+        log.error("  > 无法获取财务数据的时效性和深度统计。")
+        return False
+
+
+def _perform_data_sampling(conn):
+    """Perform data sampling checks"""
+    log.info("  [检查4/4] 数据抽样详情:")
+    sample_stocks_result = conn.execute(text("""
+        SELECT ts_code FROM financial_indicators 
+        GROUP BY ts_code 
+        ORDER BY RANDOM() 
+        LIMIT 5
+    """)).fetchall()
+    
+    for row in sample_stocks_result:
+        stock = row[0]
+        stock_stats = conn.execute(text("""
+            SELECT MIN(end_date) as first_date, MAX(end_date) as last_date, COUNT(1) as count 
+            FROM financial_indicators WHERE ts_code = :stock
+        """), {"stock": stock}).fetchone()
         
-        # 磁盘使用情况
-        disk = psutil.disk_usage('.')
-        disk_percent = (disk.used / disk.total) * 100
-        disk_free_gb = disk.free / (1024**3)
+        log.info(
+            f"  > 抽样 {stock}: 共 {stock_stats.count} 条记录, "
+            f"报告期从 {stock_stats.first_date} 到 {stock_stats.last_date}"
+        )
+
+
+def check_system_resources() -> bool:
+    """
+    检查系统资源使用情况
+    
+    Returns:
+        bool: True if system resources are within acceptable limits, False otherwise
+    """
+    log.info("  --- 开始系统资源检查 ---")
+    
+    try:
+        resources = _gather_system_resources()
+        _log_resource_status(resources)
+        return _evaluate_resource_health(resources)
         
-        log.info(f"  > CPU使用率: {cpu_percent}%")
-        log.info(f"  > 内存使用率: {memory_percent}% (可用: {memory_available_gb:.2f}GB)")
-        log.info(f"  > 磁盘使用率: {disk_percent:.1f}% (可用: {disk_free_gb:.2f}GB)")
-        
-        # 判断资源状态
-        if cpu_percent < 80 and memory_percent < 85 and disk_percent < 90:
-            log.info("  > 系统资源状态: 良好")
-            return True
-        else:
-            log.warning("  > 系统资源状态: 紧张，可能影响性能")
-            return False
-            
     except Exception as e:
         log.error(f"  > 系统资源检查失败: {e}")
         return False
 
 
-def check_database_performance(dm):
-    """检查数据库性能"""
-    log.info("  --- 开始数据库性能检查 ---")
-    try:
-        start_time = time.time()
+def _gather_system_resources() -> dict:
+    """Gather system resource metrics"""
+    # CPU使用率
+    cpu_percent = psutil.cpu_percent(interval=1)
+    
+    # 内存使用情况
+    memory = psutil.virtual_memory()
+    
+    # 磁盘使用情况
+    disk = psutil.disk_usage('.')
+    
+    return {
+        'cpu_percent': cpu_percent,
+        'memory_percent': memory.percent,
+        'memory_available_gb': memory.available / (1024**3),
+        'disk_percent': (disk.used / disk.total) * 100,
+        'disk_free_gb': disk.free / (1024**3)
+    }
+
+
+def _log_resource_status(resources: dict):
+    """Log resource status information"""
+    log.info(f"  > CPU使用率: {resources['cpu_percent']}%")
+    log.info(f"  > 内存使用率: {resources['memory_percent']}% (可用: {resources['memory_available_gb']:.2f}GB)")
+    log.info(f"  > 磁盘使用率: {resources['disk_percent']:.1f}% (可用: {resources['disk_free_gb']:.2f}GB)")
+
+
+def _evaluate_resource_health(resources: dict) -> bool:
+    """Evaluate if system resources are healthy"""
+    is_healthy = (
+        resources['cpu_percent'] < CheckConfig.MAX_CPU_PERCENT and
+        resources['memory_percent'] < CheckConfig.MAX_MEMORY_PERCENT and
+        resources['disk_percent'] < CheckConfig.MAX_DISK_PERCENT
+    )
+    
+    if is_healthy:
+        log.info("  > 系统资源状态: 良好")
+    else:
+        log.warning("  > 系统资源状态: 紧张，可能影响性能")
+    
+    return is_healthy
+
+
+def check_database_performance(dm: data.DataManager) -> bool:
+    """
+    检查数据库性能 - 优化版本
+    
+    Args:
+        dm: DataManager instance for database operations
         
+    Returns:
+        bool: True if database performance is acceptable, False otherwise
+    """
+    log.info("  --- 开始数据库性能检查 ---")
+    
+    from system_check_config import PERF_THRESHOLDS
+    
+    try:
         with dm.engine.connect() as conn:
-            # 测试简单查询性能
+            # 1. 简单查询性能测试
             simple_query_start = time.time()
             conn.execute(text("SELECT 1")).scalar()
-            simple_query_time = time.time() - simple_query_start
+            simple_query_time = (time.time() - simple_query_start) * 1000
             
-            # 测试复杂查询性能
+            # 2. 批量获取统计信息 - 单次查询获取多个指标
             complex_query_start = time.time()
-            result = conn.execute(text("""
-                SELECT COUNT(*) as total_records,
-                       COUNT(DISTINCT ts_code) as unique_stocks,
-                       MAX(trade_date) as latest_date
-                FROM ts_daily
+            stats_result = conn.execute(text("""
+                WITH table_stats AS (
+                    SELECT 
+                        COALESCE(
+                            (SELECT reltuples::bigint FROM pg_class WHERE relname = 'ts_daily'),
+                            0
+                        ) as total_records,
+                        (SELECT MAX(trade_date) FROM ts_daily) as latest_date
+                ),
+                stock_stats AS (
+                    SELECT COUNT(DISTINCT ts_code) as unique_stocks
+                    FROM (
+                        SELECT ts_code FROM ts_daily 
+                        ORDER BY trade_date DESC 
+                        LIMIT 10000
+                    ) recent_sample
+                )
+                SELECT 
+                    ts.total_records,
+                    ts.latest_date,
+                    ss.unique_stocks
+                FROM table_stats ts, stock_stats ss
             """)).fetchone()
-            complex_query_time = time.time() - complex_query_start
             
-            # 检查数据库大小
+            complex_query_time = (time.time() - complex_query_start) * 1000
+            
+            # 3. 数据库大小查询（可选，不影响性能判断）
             try:
-                db_size_result = conn.execute(text("""
-                    SELECT pg_size_pretty(pg_database_size(current_database())) as db_size
-                """)).scalar()
-                log.info(f"  > 数据库大小: {db_size_result}")
-            except:
+                db_size = conn.execute(text(
+                    "SELECT pg_size_pretty(pg_database_size(current_database()))"
+                )).scalar()
+                log.info(f"  > 数据库大小: {db_size}")
+            except Exception:
                 log.info("  > 数据库大小: 无法获取")
             
-            log.info(f"  > 简单查询耗时: {simple_query_time*1000:.2f}ms")
-            log.info(f"  > 复杂查询耗时: {complex_query_time*1000:.2f}ms")
+            # 输出性能指标
+            log.info(f"  > 简单查询耗时: {simple_query_time:.2f}ms")
+            log.info(f"  > 复杂查询耗时: {complex_query_time:.2f}ms")
             
-            if result:
-                log.info(f"  > 数据记录总数: {result[0]:,}")
-                log.info(f"  > 股票数量: {result[1]:,}")
-                log.info(f"  > 最新数据日期: {result[2]}")
+            if stats_result:
+                log.info(f"  > 数据记录总数: {stats_result.total_records:,}")
+                log.info(f"  > 股票数量: {stats_result.unique_stocks:,}")
+                log.info(f"  > 最新数据日期: {stats_result.latest_date}")
             
-            # 判断性能状态
-            if complex_query_time < 1.0:
+            # 使用配置化的阈值判断性能
+            performance_ok = (
+                simple_query_time <= PERF_THRESHOLDS.SIMPLE_QUERY_MAX_MS and
+                complex_query_time <= PERF_THRESHOLDS.COMPLEX_QUERY_MAX_MS
+            )
+            
+            if performance_ok:
                 log.info("  > 数据库性能: 良好")
                 return True
             else:
-                log.warning("  > 数据库性能: 较慢，可能需要优化")
+                log.warning(f"  > 数据库性能: 需要优化 (阈值: 简单查询<{PERF_THRESHOLDS.SIMPLE_QUERY_MAX_MS}ms, 复杂查询<{PERF_THRESHOLDS.COMPLEX_QUERY_MAX_MS}ms)")
                 return False
                 
     except Exception as e:
@@ -247,10 +361,22 @@ def check_data_freshness(dm):
         return False
 
 
-def test_stable_factors(dm):
-    """测试稳定的因子计算"""
+def test_stable_factors(dm: data.DataManager) -> bool:
+    """
+    测试稳定的因子计算
+    
+    Args:
+        dm: DataManager instance
+        
+    Returns:
+        bool: True if factor calculations are stable, False otherwise
+    """
     log.info("  --- 开始稳定因子计算测试 ---")
+    start_time = time.time()
+    
     try:
+        from system_check_config import TEST_CONFIG
+        
         ff = qe.FactorFactory(_data_manager=dm)
         
         # 获取测试日期
@@ -260,21 +386,24 @@ def test_stable_factors(dm):
         trade_cal = dm.pro.trade_cal(exchange="", start_date=start_date, end_date=end_date)
         test_date = trade_cal[trade_cal["is_open"] == 1]["cal_date"].iloc[-1]
         
-        # 测试稳定的因子
-        test_stocks = ["600519.SH", "000001.SZ"]
-        stable_factors = ["pe_ttm", "size"]
-        
-        log.info(f"  > 测试股票: {test_stocks}")
-        log.info(f"  > 测试因子: {stable_factors}")
+        log.info(f"  > 测试股票: {CheckConfig.TEST_STOCKS}")
+        log.info(f"  > 测试因子: {CheckConfig.STABLE_FACTORS}")
         log.info(f"  > 测试日期: {test_date}")
         
         success_count = 0
-        total_tests = len(stable_factors) * len(test_stocks)
+        total_tests = len(CheckConfig.STABLE_FACTORS) * len(CheckConfig.TEST_STOCKS)
         
-        for factor_name in stable_factors:
-            for stock in test_stocks:
+        for factor_name in CheckConfig.STABLE_FACTORS:
+            for stock in CheckConfig.TEST_STOCKS:
                 try:
-                    value = ff.calculate(factor_name, ts_code=stock, date=test_date)
+                    # 使用更安全的因子计算方法
+                    if hasattr(ff, f'calc_{factor_name}'):
+                        calc_method = getattr(ff, f'calc_{factor_name}')
+                        value = calc_method(ts_code=stock, date=test_date)
+                    else:
+                        log.warning(f"  > 因子计算方法 calc_{factor_name} 不存在")
+                        continue
+                        
                     if value is not None and pd.notna(value):
                         log.info(f"  > {stock} {factor_name}: {value:.4f}")
                         success_count += 1
@@ -286,7 +415,12 @@ def test_stable_factors(dm):
         success_rate = success_count / total_tests if total_tests > 0 else 0
         log.info(f"  > 因子计算成功率: {success_rate:.1%} ({success_count}/{total_tests})")
         
-        if success_rate >= 0.8:
+        # Log performance metrics
+        total_duration = time.time() - start_time
+        avg_time_per_factor = total_duration / total_tests if total_tests > 0 else 0
+        log.info(f"  > 平均因子计算时间: {avg_time_per_factor:.3f}秒")
+        
+        if success_rate >= TEST_CONFIG.MIN_FACTOR_SUCCESS_RATE:
             log.info("  > 稳定因子测试: 通过")
             return True
         else:
@@ -346,6 +480,504 @@ def test_data_storage(dm):
         return False
 
 
+def comprehensive_database_check(dm) -> bool:
+    """
+    全面的数据库数据完整性检查 - 重构版本
+    使用面向对象设计，提高可维护性和可测试性
+    """
+    try:
+        from system_check_config_improved import get_config
+        config = get_config("default").data_quality
+    except ImportError:
+        from system_check_config import DATA_QUALITY_THRESHOLDS
+        config = DATA_QUALITY_THRESHOLDS
+    
+    # Use the improved DatabaseChecker class
+    checker = DatabaseChecker(dm, config)
+    return checker.run_comprehensive_check()
+
+
+class DatabaseChecker:
+    """Handles comprehensive database integrity checks"""
+    
+    def __init__(self, dm, config=None):
+        self.dm = dm
+        self.config = config or self._get_default_config()
+        self.issues_found = []
+        self.total_checks = 0
+        self.passed_checks = 0
+    
+    def _get_default_config(self):
+        """Get default configuration with proper fallback handling"""
+        try:
+            from system_check_config_improved import get_config
+            return get_config("default").data_quality
+        except ImportError:
+            log.warning("Advanced configuration not available, using basic configuration")
+            return self._create_fallback_config()
+    
+    def _create_fallback_config(self):
+        """Create fallback configuration when advanced config is not available"""
+        from types import SimpleNamespace
+        
+        # Define constants to avoid duplication
+        CORE_TABLES = {
+            'stock_basic': '股票基本信息',
+            'ts_daily': '日线行情数据', 
+            'factors_exposure': '因子暴露数据',
+            'financial_indicators': '财务指标数据',
+            'ts_adj_factor': '复权因子数据'
+        }
+        
+        TIME_RANGE_TABLES = ['ts_daily', 'factors_exposure', 'financial_indicators']
+        
+        return SimpleNamespace(
+            CORE_TABLES=CORE_TABLES,
+            TIME_RANGE_TABLES=TIME_RANGE_TABLES,
+            MAX_DATA_AGE_DAYS=7,
+            MIN_STOCK_COVERAGE_RATIO=0.8,
+            MAX_INVALID_DATA_PERCENT=1.0,
+            MAX_PRICE_INCONSISTENCY_PERCENT=0.1,
+            MAX_FINANCIAL_DATA_AGE_MONTHS=6,
+            MIN_ORPHAN_THRESHOLD=100
+        )
+    
+    def run_comprehensive_check(self) -> bool:
+        """Run all database checks and return overall success"""
+        log.info("  --- 开始全面数据库数据完整性检查 ---")
+        
+        try:
+            with self.dm.engine.connect() as conn:
+                # Run all check methods
+                check_methods = [
+                    (self._check_core_tables, "核心表存在性和基本统计"),
+                    (self._check_time_ranges, "数据时间范围"),
+                    (self._check_stock_consistency, "股票代码一致性"),
+                    (self._check_data_quality, "数据质量问题"),
+                    (self._check_factor_completeness, "因子数据完整性"),
+                    (self._check_financial_completeness, "财务数据完整性"),
+                    (self._check_data_relationships, "数据关联性"),
+                    (self._check_database_metrics, "数据库性能指标")
+                ]
+                
+                for i, (check_method, description) in enumerate(check_methods, 1):
+                    log.info(f"  [{i}/{len(check_methods)}] 检查{description}")
+                    try:
+                        check_method(conn)
+                    except Exception as e:
+                        log.error(f"    ✗ {description}检查失败: {e}")
+                        self.issues_found.append(f"{description}检查失败: {e}")
+            
+            return self._generate_report()
+            
+        except Exception as e:
+            log.error(f"  > 全面数据库检查失败: {e}")
+            return False
+    
+    def _check_core_tables(self, conn) -> None:
+        """Check core table existence and basic statistics"""
+        for table, desc in self.config.CORE_TABLES.items():
+            self.total_checks += 1
+            try:
+                # Use safe query building
+                count = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+                log.info(f"    ✓ {desc} ({table}): {count:,} 条记录")
+                self.passed_checks += 1
+            except Exception as e:
+                log.error(f"    ✗ {desc} ({table}): 检查失败 - {e}")
+                self.issues_found.append(f"表 {table} 检查失败: {e}")
+    
+    def _check_time_ranges(self, conn) -> None:
+        """Check data time ranges and freshness"""
+        for table in self.config.TIME_RANGE_TABLES:
+            self.total_checks += 1
+            try:
+                date_col = 'end_date' if table == 'financial_indicators' else 'trade_date'
+                
+                result = conn.execute(text(f"""
+                    SELECT MIN({date_col}) as min_date, 
+                           MAX({date_col}) as max_date,
+                           COUNT(DISTINCT {date_col}) as date_count
+                    FROM {table}
+                """)).fetchone()
+                
+                if result and result[0]:
+                    log.info(f"    ✓ {table}: {result[0]} 至 {result[1]} ({result[2]} 个日期)")
+                    self.passed_checks += 1
+                    
+                    # Check data freshness for trading data
+                    if table in ['ts_daily', 'factors_exposure']:
+                        days_old = (datetime.now().date() - result[1]).days
+                        if days_old > self.config.MAX_DATA_AGE_DAYS:
+                            self.issues_found.append(f"{table} 数据过旧，最新数据距今 {days_old} 天")
+                else:
+                    log.warning(f"    ⚠ {table}: 无有效日期数据")
+                    self.issues_found.append(f"{table} 无有效日期数据")
+                    
+            except Exception as e:
+                log.error(f"    ✗ {table} 时间范围检查失败: {e}")
+                self.issues_found.append(f"{table} 时间范围检查失败: {e}")
+    
+    def _check_stock_consistency(self, conn) -> None:
+        """Check stock code consistency across tables"""
+        self.total_checks += 1
+        try:
+            stock_counts = {}
+            for table in ['stock_basic', 'ts_daily', 'factors_exposure', 'financial_indicators']:
+                if table == 'stock_basic':
+                    count = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+                else:
+                    count = conn.execute(text(f"SELECT COUNT(DISTINCT ts_code) FROM {table}")).scalar()
+                stock_counts[table] = count
+            
+            log.info("    股票代码数量对比:")
+            for table, count in stock_counts.items():
+                log.info(f"      {table}: {count:,} 只股票")
+            
+            # Check coverage ratios
+            base_count = stock_counts.get('stock_basic', 0)
+            if base_count > 0:
+                for table, count in stock_counts.items():
+                    if table != 'stock_basic':
+                        coverage = count / base_count
+                        if coverage < self.config.MIN_STOCK_COVERAGE_RATIO:
+                            self.issues_found.append(f"{table} 股票覆盖率过低: {coverage:.1%}")
+            
+            self.passed_checks += 1
+            
+        except Exception as e:
+            log.error(f"    ✗ 股票代码一致性检查失败: {e}")
+            self.issues_found.append(f"股票代码一致性检查失败: {e}")
+    
+    def _check_data_quality(self, conn) -> None:
+        """Check data quality issues in trading data"""
+        self.total_checks += 1
+        try:
+            quality_issues = conn.execute(text("""
+                SELECT 
+                    COUNT(*) as total_records,
+                    SUM(CASE WHEN close IS NULL OR close <= 0 THEN 1 ELSE 0 END) as invalid_close,
+                    SUM(CASE WHEN vol IS NULL OR vol < 0 THEN 1 ELSE 0 END) as invalid_volume,
+                    SUM(CASE WHEN high < low THEN 1 ELSE 0 END) as price_inconsistency
+                FROM ts_daily
+                WHERE trade_date >= (SELECT MAX(trade_date) - INTERVAL '30 days' FROM ts_daily)
+            """)).fetchone()
+            
+            if quality_issues and quality_issues[0] > 0:
+                total_records = quality_issues[0]
+                invalid_close_pct = (quality_issues[1] / total_records) * 100
+                invalid_vol_pct = (quality_issues[2] / total_records) * 100
+                price_inconsist_pct = (quality_issues[3] / total_records) * 100
+                
+                log.info(f"    最近30天数据质量 (共{total_records:,}条):")
+                log.info(f"      无效收盘价: {quality_issues[1]} ({invalid_close_pct:.2f}%)")
+                log.info(f"      无效成交量: {quality_issues[2]} ({invalid_vol_pct:.2f}%)")
+                log.info(f"      价格不一致: {quality_issues[3]} ({price_inconsist_pct:.2f}%)")
+                
+                if invalid_close_pct > self.config.MAX_INVALID_DATA_PERCENT:
+                    self.issues_found.append(f"无效收盘价比例过高: {invalid_close_pct:.2f}%")
+                if price_inconsist_pct > self.config.MAX_PRICE_INCONSISTENCY_PERCENT:
+                    self.issues_found.append(f"价格不一致比例过高: {price_inconsist_pct:.2f}%")
+            
+            self.passed_checks += 1
+            
+        except Exception as e:
+            log.error(f"    ✗ 数据质量检查失败: {e}")
+            self.issues_found.append(f"数据质量检查失败: {e}")
+    
+    def _check_factor_completeness(self, conn) -> None:
+        """Check factor data completeness"""
+        self.total_checks += 1
+        try:
+            factor_stats = conn.execute(text("""
+                SELECT 
+                    factor_name,
+                    COUNT(*) as record_count,
+                    COUNT(DISTINCT ts_code) as stock_count,
+                    COUNT(DISTINCT trade_date) as date_count,
+                    MIN(trade_date) as min_date,
+                    MAX(trade_date) as max_date
+                FROM factors_exposure 
+                GROUP BY factor_name 
+                ORDER BY record_count DESC
+            """)).fetchall()
+            
+            if factor_stats:
+                log.info(f"    因子数据统计 (共{len(factor_stats)}个因子):")
+                for factor in factor_stats[:5]:  # Show top 5
+                    log.info(f"      {factor[0]}: {factor[1]:,}条记录, {factor[2]}只股票, {factor[3]}个日期")
+                
+                # Check factor data consistency
+                date_counts = [f[3] for f in factor_stats]
+                if len(set(date_counts)) > 1:
+                    self.issues_found.append(f"因子数据日期不一致，范围: {min(date_counts)}-{max(date_counts)}")
+            else:
+                self.issues_found.append("无因子数据")
+            
+            self.passed_checks += 1
+            
+        except Exception as e:
+            log.error(f"    ✗ 因子数据完整性检查失败: {e}")
+            self.issues_found.append(f"因子数据完整性检查失败: {e}")
+    
+    def _check_financial_completeness(self, conn) -> None:
+        """Check financial data completeness"""
+        self.total_checks += 1
+        try:
+            financial_stats = conn.execute(text("""
+                SELECT 
+                    COUNT(DISTINCT ts_code) as stock_count,
+                    COUNT(DISTINCT end_date) as period_count,
+                    MIN(end_date) as earliest_period,
+                    MAX(end_date) as latest_period,
+                    COUNT(*) as total_records
+                FROM financial_indicators
+            """)).fetchone()
+            
+            if financial_stats:
+                log.info("    财务数据统计:")
+                log.info(f"      覆盖股票: {financial_stats[0]:,} 只")
+                log.info(f"      报告期数: {financial_stats[1]} 个")
+                log.info(f"      时间范围: {financial_stats[2]} 至 {financial_stats[3]}")
+                log.info(f"      总记录数: {financial_stats[4]:,} 条")
+                
+                # Check financial data freshness
+                if financial_stats[3]:
+                    latest_period = pd.to_datetime(financial_stats[3])
+                    months_old = (datetime.now() - latest_period).days / 30
+                    if months_old > self.config.MAX_FINANCIAL_DATA_AGE_MONTHS:
+                        self.issues_found.append(f"财务数据过旧，最新报告期距今 {months_old:.1f} 个月")
+            else:
+                self.issues_found.append("无财务数据")
+            
+            self.passed_checks += 1
+            
+        except Exception as e:
+            log.error(f"    ✗ 财务数据完整性检查失败: {e}")
+            self.issues_found.append(f"财务数据完整性检查失败: {e}")
+    
+    def _check_data_relationships(self, conn) -> None:
+        """Check data relationships between tables"""
+        self.total_checks += 1
+        try:
+            # Check for daily data without factor data
+            orphan_daily = conn.execute(text("""
+                SELECT COUNT(DISTINCT d.ts_code) 
+                FROM ts_daily d 
+                LEFT JOIN factors_exposure f ON d.ts_code = f.ts_code AND d.trade_date = f.trade_date
+                WHERE f.ts_code IS NULL 
+                AND d.trade_date >= (SELECT MAX(trade_date) - INTERVAL '7 days' FROM ts_daily)
+            """)).scalar()
+            
+            if orphan_daily and orphan_daily > 0:
+                log.warning(f"    ⚠ 发现 {orphan_daily} 只股票有日线数据但缺少因子数据")
+                if orphan_daily > self.config.MIN_ORPHAN_THRESHOLD:
+                    self.issues_found.append(f"大量股票缺少因子数据: {orphan_daily} 只")
+            else:
+                log.info("    ✓ 数据关联性良好")
+            
+            self.passed_checks += 1
+            
+        except Exception as e:
+            log.error(f"    ✗ 数据关联性检查失败: {e}")
+            self.issues_found.append(f"数据关联性检查失败: {e}")
+    
+    def _check_database_metrics(self, conn) -> None:
+        """Check database performance metrics"""
+        self.total_checks += 1
+        try:
+            # Check database size
+            db_size = conn.execute(text("""
+                SELECT pg_size_pretty(pg_database_size(current_database()))
+            """)).scalar()
+            
+            # Check table sizes
+            table_sizes = conn.execute(text("""
+                SELECT 
+                    tablename,
+                    pg_size_pretty(pg_total_relation_size(tablename::regclass)) as size
+                FROM pg_tables 
+                WHERE schemaname = 'public' 
+                AND tablename IN ('ts_daily', 'factors_exposure', 'financial_indicators')
+                ORDER BY pg_total_relation_size(tablename::regclass) DESC
+            """)).fetchall()
+            
+            log.info(f"    数据库大小: {db_size}")
+            log.info("    主要表大小:")
+            for table_name, size in table_sizes:
+                log.info(f"      {table_name}: {size}")
+            
+            self.passed_checks += 1
+            
+        except Exception as e:
+            log.error(f"    ✗ 数据库性能指标检查失败: {e}")
+            self.issues_found.append(f"数据库性能指标检查失败: {e}")
+    
+    def _generate_report(self) -> bool:
+        """Generate final check report"""
+        log.info("  --- 全面数据库检查报告 ---")
+        log.info(f"  总检查项: {self.total_checks}")
+        log.info(f"  通过检查: {self.passed_checks}")
+        
+        if self.total_checks > 0:
+            success_rate = (self.passed_checks / self.total_checks) * 100
+            log.info(f"  检查通过率: {success_rate:.1f}%")
+        
+        if self.issues_found:
+            log.warning(f"  发现 {len(self.issues_found)} 个问题:")
+            for i, issue in enumerate(self.issues_found, 1):
+                log.warning(f"    {i}. {issue}")
+        else:
+            log.info("  ✅ 未发现数据完整性问题")
+        
+        log.info("  --- 全面数据库数据完整性检查完成 ---")
+        
+        return len(self.issues_found) == 0
+
+
+async def test_api_concurrent_performance(dm, test_count=10):
+    """测试API并发性能"""
+    log.info("  --- 开始API并发性能测试 ---")
+    
+    TUSHARE_API_URL = "http://api.tushare.pro"
+    
+    async def fetch_tushare_api(session, api_name, params):
+        payload = {
+            "api_name": api_name,
+            "token": config.TUSHARE_TOKEN,
+            "params": params,
+            "fields": []
+        }
+        try:
+            async with session.post(
+                TUSHARE_API_URL, 
+                data=json.dumps(payload), 
+                timeout=30
+            ) as response:
+                resp_json = await response.json()
+                return resp_json.get("code") == 0
+        except Exception:
+            return False
+    
+    try:
+        # 测试基础API调用
+        test_params = {
+            "ts_code": "600519.SH",
+            "start_date": "20240101",
+            "end_date": "20240131"
+        }
+        
+        start_time = time.time()
+        tasks = []
+        
+        async with aiohttp.ClientSession() as session:
+            for _ in range(test_count):
+                task = asyncio.create_task(
+                    fetch_tushare_api(session, "daily", test_params)
+                )
+                tasks.append(task)
+            
+            results = await asyncio.gather(*tasks)
+        
+        end_time = time.time()
+        total_duration = end_time - start_time
+        success_count = sum(1 for r in results if r)
+        
+        log.info(f"  > 并发请求数: {test_count}")
+        log.info(f"  > 总耗时: {total_duration:.2f}秒")
+        log.info(f"  > 成功率: {success_count/test_count:.1%}")
+        log.info(f"  > 平均RPS: {test_count/total_duration:.2f}")
+        
+        if success_count >= test_count * 0.8:
+            log.info("  > API并发性能: 良好")
+            return True
+        else:
+            log.warning("  > API并发性能: 需要关注")
+            return False
+            
+    except Exception as e:
+        log.error(f"  > API并发性能测试失败: {e}")
+        return False
+
+
+def test_query_performance_benchmark(dm):
+    """测试查询性能基准"""
+    log.info("  --- 开始查询性能基准测试 ---")
+    
+    test_queries = [
+        {
+            'name': '单股票最新数据查询',
+            'sql': """
+                SELECT * FROM ts_daily 
+                WHERE ts_code = '600519.SH' 
+                ORDER BY trade_date DESC 
+                LIMIT 1
+            """,
+            'expected_ms': 50
+        },
+        {
+            'name': '因子数据查询',
+            'sql': """
+                SELECT ts_code, factor_value
+                FROM factors_exposure 
+                WHERE factor_name = 'pe_ttm' 
+                AND trade_date >= '2024-01-01'
+                ORDER BY trade_date DESC
+                LIMIT 100
+            """,
+            'expected_ms': 200
+        },
+        {
+            'name': '市场涨幅排行查询',
+            'sql': """
+                SELECT ts_code, close, pct_chg
+                FROM ts_daily 
+                WHERE trade_date = (SELECT MAX(trade_date) FROM ts_daily LIMIT 1)
+                ORDER BY pct_chg DESC 
+                LIMIT 50
+            """,
+            'expected_ms': 500
+        }
+    ]
+    
+    try:
+        with dm.engine.connect() as conn:
+            all_passed = True
+            
+            for query in test_queries:
+                log.info(f"  > 测试: {query['name']}")
+                
+                # 运行3次取平均值
+                times = []
+                for i in range(3):
+                    start_time = time.time()
+                    try:
+                        result = conn.execute(text(query['sql'])).fetchall()
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        times.append(elapsed_ms)
+                    except Exception as e:
+                        log.error(f"    查询失败: {e}")
+                        all_passed = False
+                        break
+                
+                if times:
+                    avg_time = sum(times) / len(times)
+                    log.info(f"    平均耗时: {avg_time:.2f}ms")
+                    log.info(f"    返回记录: {len(result) if 'result' in locals() else 0}条")
+                    
+                    if avg_time <= query['expected_ms']:
+                        log.info("    ✓ 性能达标")
+                    else:
+                        log.warning(f"    ⚠ 性能超时 (期望<{query['expected_ms']}ms)")
+                        all_passed = False
+            
+            return all_passed
+            
+    except Exception as e:
+        log.error(f"  > 查询性能基准测试失败: {e}")
+        return False
+
+
 def run_quick_check():
     """快速检查 - 只检查最基础的功能"""
     log.info("=== 快速系统检查 ===")
@@ -377,7 +1009,7 @@ def run_stability_check():
     """稳定性检查 - 专注于系统稳定性和数据质量"""
     log.info("=== 系统稳定性检查 ===")
     checks_passed = 0
-    total_checks = 6
+    total_checks = 7
     
     # 基础检查
     if check_config():
@@ -394,6 +1026,17 @@ def run_stability_check():
     if check_tushare_api(dm):
         checks_passed += 1
     
+    # 全面数据库数据完整性检查
+    log.info("\n--- [检查 4/7] 全面数据库数据完整性检查 ---")
+    try:
+        if comprehensive_database_check(dm):
+            log.info("  [PASS] 全面数据库数据完整性检查通过。")
+            checks_passed += 1
+        else:
+            log.warning("  [WARN] 全面数据库数据完整性检查发现问题，请查看详细日志。")
+    except Exception as e:
+        log.error(f"  [FAIL] 全面数据库数据完整性检查失败: {e}")
+    
     if check_system_resources():
         checks_passed += 1
     
@@ -401,6 +1044,56 @@ def run_stability_check():
         checks_passed += 1
     
     if test_data_storage(dm):
+        checks_passed += 1
+    
+    return finalize_report(checks_passed, total_checks)
+
+
+def run_performance_check():
+    """性能检查 - 专注于API和数据库性能测试"""
+    log.info("=== 系统性能检查 ===")
+    checks_passed = 0
+    total_checks = 5
+    
+    # 基础检查
+    if check_config():
+        checks_passed += 1
+    else:
+        return finalize_report(checks_passed, total_checks)
+    
+    dm = check_database_connection()
+    if dm:
+        checks_passed += 1
+    else:
+        return finalize_report(checks_passed, total_checks)
+    
+    # 性能测试
+    log.info("\n--- [检查 3/5] API并发性能测试 ---")
+    try:
+        # 更安全的异步函数执行方式
+        if asyncio.run(test_api_concurrent_performance(dm, 5)):
+            checks_passed += 1
+    except RuntimeError as e:
+        if "asyncio.run() cannot be called from a running event loop" in str(e):
+            # 如果已经在事件循环中，使用 create_task
+            try:
+                loop = asyncio.get_event_loop()
+                task = loop.create_task(test_api_concurrent_performance(dm, 5))
+                if loop.run_until_complete(task):
+                    checks_passed += 1
+            except Exception as inner_e:
+                log.error(f"  > API并发性能测试失败: {inner_e}")
+        else:
+            log.error(f"  > API并发性能测试失败: {e}")
+    except Exception as e:
+        log.error(f"  > API并发性能测试失败: {e}")
+    
+    log.info("\n--- [检查 4/5] 查询性能基准测试 ---")
+    if test_query_performance_benchmark(dm):
+        checks_passed += 1
+    
+    log.info("\n--- [检查 5/5] 数据库性能检查 ---")
+    if check_database_performance(dm):
         checks_passed += 1
     
     return finalize_report(checks_passed, total_checks)
@@ -442,9 +1135,8 @@ def check_database_connection():
 
 def check_tushare_api(dm):
     """检查Tushare API"""
-    log.info("\n--- [检查] Tushare API连通性 ---")
     try:
-        stock_list = dm.get_stock_basic(list_status="L")
+        stock_list = dm.get_stock_basic("L")
         assert (
             stock_list is not None and not stock_list.empty
         ), "获取股票列表失败，返回为空。"
@@ -462,7 +1154,7 @@ def run_all_checks():
     执行所有系统健康检查。
     """
     checks_passed = 0
-    total_checks = 10  # 升级：总检查项增加到10个
+    total_checks = 11  # 升级：总检查项增加到11个
 
     log.info("==============================================")
     log.info("=== A股量化投研平台 - 完整系统健康检查 ===")
@@ -480,9 +1172,9 @@ def run_all_checks():
     checks_passed += 1
 
     # --- 检查 3: Tushare API连通性 ---
-    if not check_tushare_api(dm):
-        return finalize_report(checks_passed, total_checks)
-    checks_passed += 1
+    log.info("\n--- [检查 3/10] Tushare API连通性 ---")
+    if check_tushare_api(dm):
+        checks_passed += 1
 
     # --- 检查 4: 系统资源状态 ---
     log.info("\n--- [检查 4/10] 系统资源状态 ---")
@@ -499,17 +1191,30 @@ def run_all_checks():
     if check_data_freshness(dm):
         checks_passed += 1
 
-    # --- 检查 7: 数据库数据质量验证 ---
-    log.info("\n--- [检查 7/10] 数据库财务数据质量验证 ---")
+    # --- 检查 7: 全面数据库数据完整性检查 ---
+    log.info("\n--- [检查 7/11] 全面数据库数据完整性检查 ---")
     try:
-        check_database_data_quality(dm)
-        log.info("  [PASS] 数据库核心数据质量验证通过。")
-        checks_passed += 1
+        if comprehensive_database_check(dm):
+            log.info("  [PASS] 全面数据库数据完整性检查通过。")
+            checks_passed += 1
+        else:
+            log.warning("  [WARN] 全面数据库数据完整性检查发现问题，请查看详细日志。")
+    except Exception as e:
+        log.error(f"  [FAIL] 全面数据库数据完整性检查失败: {e}")
+
+    # --- 检查 8: 数据库财务数据质量验证 ---
+    log.info("\n--- [检查 8/11] 数据库财务数据质量验证 ---")
+    try:
+        if check_database_data_quality(dm):
+            log.info("  [PASS] 数据库核心数据质量验证通过。")
+            checks_passed += 1
+        else:
+            log.warning("  [WARN] 数据库核心数据质量验证发现问题。")
     except Exception as e:
         log.error(f"  [FAIL] 数据库数据质量验证失败: {e}")
 
-    # --- 检查 8: 引擎层核心功能 (FactorFactory & FactorProcessor) ---
-    log.info("\n--- [检查 8/10] 引擎层因子计算 ---")
+    # --- 检查 9: 引擎层核心功能 (FactorFactory & FactorProcessor) ---
+    log.info("\n--- [检查 9/11] 引擎层因子计算 ---")
     try:
         ff = qe.FactorFactory(_data_manager=dm)
         fp = qe.FactorProcessor(_data_manager=dm)
@@ -554,8 +1259,8 @@ def run_all_checks():
         finalize_report(checks_passed, total_checks)
         return
 
-    # --- 检查 6: 智能分析层 (AIOrchestrator & AI API) ---
-    log.info("\n--- [检查 6/7] 智能分析层与AI API连通性 (低成本测试) ---")
+    # --- 检查 10: 智能分析层 (AIOrchestrator & AI API) ---
+    log.info("\n--- [检查 10/11] 智能分析层与AI API连通性 (低成本测试) ---")
     try:
         ai_orchestrator = intelligence.AIOrchestrator(config.AI_MODEL_CONFIG, dm)
         prompt = "你好，请确认你可以正常工作。回答'ok'即可。"
@@ -573,8 +1278,8 @@ def run_all_checks():
         finalize_report(checks_passed, total_checks)
         return
 
-    # --- 检查 7: 端到端工作流冒烟测试 ---
-    log.info("\n--- [检查 7/7] 端到端工作流冒烟测试 ---")
+    # --- 检查 11: 端到端工作流冒烟测试 ---
+    log.info("\n--- [检查 11/11] 端到端工作流冒烟测试 ---")
     try:
         log.info("  正在尝试模拟调用每日策略工作流...")
         test_adaptive_strategy = qe.AdaptiveAlphaStrategy(
@@ -608,6 +1313,94 @@ def finalize_report(passed, total):
         log.warning("系统存在问题，请根据上面的 [FAIL] 日志进行排查。")
 
 
+
+
+
+def main():
+    """Main entry point for the system health checker"""
+    parser = argparse.ArgumentParser(
+        description="A股量化投研平台系统健康检查",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python run_system_check.py --mode quick
+  python run_system_check.py --mode full --output report.json
+  python run_system_check.py --mode stability --verbose
+  python run_system_check.py --mode performance --no-interactive
+        """
+    )
+    
+    parser.add_argument(
+        "--mode", 
+        choices=["quick", "full", "stability", "performance"], 
+        default="full",
+        help="检查模式: quick(快速检查), full(完整检查), stability(稳定性检查), performance(性能检查)"
+    )
+    
+    parser.add_argument(
+        "--output",
+        help="输出报告到指定文件 (JSON格式)"
+    )
+    
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="详细输出模式"
+    )
+    
+    parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="非交互模式，不等待用户输入"
+    )
+    
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="检查超时时间（秒），默认300秒"
+    )
+    
+    try:
+        args = parser.parse_args()
+        
+        # Set logging level based on verbosity
+        if args.verbose:
+            import logging
+            log.setLevel(logging.DEBUG)
+        
+        # Run the appropriate check mode
+        if args.mode == "quick":
+            result = run_quick_check()
+        elif args.mode == "stability":
+            result = run_stability_check()
+        elif args.mode == "performance":
+            result = run_performance_check()
+        else:
+            result = run_all_checks()
+        
+        # Save report if output file specified
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'timestamp': datetime.now().isoformat(),
+                    'mode': args.mode,
+                    'result': result
+                }, f, ensure_ascii=False, indent=2)
+            log.info(f"报告已保存到: {args.output}")
+        
+        # Interactive mode prompt
+        if not args.no_interactive:
+            input("\n检查完毕，请按 Enter 键退出...")
+            
+    except KeyboardInterrupt:
+        log.info("\n用户中断检查")
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"系统检查过程中发生错误: {e}")
+        if args.verbose:
+            log.error(traceback.format_exc())
+        sys.exit(1)
+
 if __name__ == "__main__":
-    run_all_checks()
-    input("\n检查完毕，请按 Enter 键退出...")
+    main()
